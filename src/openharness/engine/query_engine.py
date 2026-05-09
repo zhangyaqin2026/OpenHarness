@@ -17,7 +17,7 @@ from openharness.permissions.checker import PermissionChecker
 from openharness.services.autodream.service import schedule_auto_dream
 from openharness.tools.base import ToolRegistry
 
-"""queryengine笔记"""
+"""queryengine笔记11"""
 class QueryEngine:
     """Owns conversation history and the tool-aware model loop."""
 
