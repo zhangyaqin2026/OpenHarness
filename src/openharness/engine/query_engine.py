@@ -17,7 +17,8 @@ from openharness.permissions.checker import PermissionChecker
 from openharness.services.autodream.service import schedule_auto_dream
 from openharness.tools.base import ToolRegistry
 
-"""queryengine笔记11"""
+"""这是一个高级对话引擎核心类 QueryEngine，管理 AI 对话历史、配置参数与工具调用循环，
+提供对话初始化、消息提交 / 继续、参数修改、历史清理等功能，追踪调用成本，支持流式响应和后台任务，实现完整的 AI 交互逻辑。"""
 class QueryEngine:
     """Owns conversation history and the tool-aware model loop."""
 

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from openharness.hooks.executor import HookExecutor
 
-
+"""    """
 @dataclass
 class ToolExecutionContext:
     """Shared execution context for tool invocations."""

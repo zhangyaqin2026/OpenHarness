@@ -62,7 +62,7 @@ MAX_TRACKED_USER_GOALS = 5
 MAX_TRACKED_ACTIVE_ARTIFACTS = 8
 MAX_TRACKED_VERIFIED_WORK = 10
 
-
+"""    """
 def _is_prompt_too_long_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(
