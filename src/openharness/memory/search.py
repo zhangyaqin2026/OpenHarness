@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from pathlib import Path
 
 from openharness.memory.scan import scan_memory_files
+from openharness.memory.schema import parse_datetime, utc_now
 from openharness.memory.types import MemoryHeader
+from openharness.memory.usage import get_memory_usage
 
 """简易记忆搜索工具，通过关键词匹配从项目记忆文件中找到相关内容。它会分词、计算匹配得分，优先展示标题 / 描述命中的结果，
 是 AI 快速检索长期记忆的核心功能。
@@ -50,10 +53,15 @@ def find_relevant_memories(
         # 统计：多少个关键词出现在 标题/描述 里
         meta_hits = sum(1 for t in tokens if t in meta)
         body_hits = sum(1 for t in tokens if t in body)
-
-        # 计算最终得分，只要有匹配（>0），就加入结果列表
-        score = meta_hits * 2.0 + body_hits
-        if score > 0:
+        usage = get_memory_usage(cwd, header.id, memory_dir=header.path.parent)
+        score = (
+            meta_hits * 2.0
+            + body_hits
+            + header.importance * 0.4
+            + min(int(usage["use_count"]), 5) * 0.1
+            + _recency_boost(header)
+        )
+        if meta_hits or body_hits:
             scored.append((score, header))
 
     # 排序：1. 按得分 从高到低 排序（-item[0]）
@@ -75,6 +83,18 @@ def _tokenize(text: str) -> set[str]:
     # 正则匹配 Unicode 汉字范围
     han_chars = set(re.findall(r"[\u4e00-\u9fff\u3400-\u4dbf]", text))
     return ascii_tokens | han_chars
+
+
+def _recency_boost(header: MemoryHeader) -> float:
+    timestamp = parse_datetime(header.updated_at) or parse_datetime(header.created_at)
+    if timestamp is None:
+        return 0.0
+    age = utc_now() - timestamp
+    if age <= timedelta(days=14):
+        return 0.3
+    if age <= timedelta(days=30):
+        return 0.1
+    return 0.0
 
 
 

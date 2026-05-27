@@ -133,6 +133,15 @@ def _convert_tools_to_codex(tools: list[dict[str, Any]]) -> list[dict[str, Any]]
     ]
 
 
+def _normalize_reasoning_effort(effort: str | None) -> str | None:
+    normalized = (effort or "").strip().lower()
+    if normalized == "max":
+        return "xhigh"
+    if normalized in {"low", "medium", "high", "xhigh"}:
+        return normalized
+    return None
+
+
 def _usage_from_response(response: dict[str, Any]) -> UsageSnapshot:
     usage = response.get("usage")
     if not isinstance(usage, dict):
@@ -255,6 +264,9 @@ class CodexApiClient:
         }
         if request.tools:
             body["tools"] = _convert_tools_to_codex(request.tools)
+        effort = _normalize_reasoning_effort(request.effort)
+        if effort:
+            body["reasoning"] = {"effort": effort}
 
         content: list[TextBlock | ToolUseBlock] = []
         current_text_parts: list[str] = []

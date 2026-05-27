@@ -148,25 +148,23 @@ class MaxTurnsExceeded(RuntimeError):
 
 @dataclass
 class QueryContext:
-    """Context shared across a query run.一次 AI 对话的 “任务说明书 + 工具箱 + 权限卡 + 运行环境
+    """Context shared across a query run."""
 
-    ToolRegistry这里跟tool里面联动”"""
-
-    api_client: SupportsStreamingMessages #调用大模型 API 的客户端，负责发请求、收流式响应、处理消息；和 AI 模型说话的 “电话”
-    tool_registry: ToolRegistry #存放所有可用工具（read_file、bash、web_search、skill 等）；AI 的工具箱
-    permission_checker: PermissionChecker #判断 AI 能不能执行某个操作（删文件、执行命令、访问路径）；AI 的保安 / 权限门禁
-    cwd: Path  #代码执行的当前目录；AI 当前所在的文件夹
-    model: str #要调用的模型（gpt-4o、claude-3 等）；本次用哪个 AI 大脑
-    system_prompt: str #给 AI 的身份设定、规则、行为要求；AI 的角色设定 ；例子：“你是一个编程助手…”
-    max_tokens: int #AI 单次最多返回多少 token；AI 每轮说话的最长长度
-    context_window_tokens: int | None = None #模型最大能接收多少 token（上下文长度）；AI 的短期记忆上限
-    auto_compact_threshold_tokens: int | None = None #超过这个 token 数就自动压缩对话；防止上下文溢出；记忆太多时，自动开始精简记忆
-    permission_prompt: PermissionPrompt | None = None #执行危险操作前，弹框问用户 “是否允许”
-    ask_user_prompt: AskUserPrompt | None = None #AI 需要更多信息时，向用户提问
-    max_turns: int | None = 200 #防止 AI 无限循环调用工具 ；AI 最多连续思考多少次
-    hook_executor: HookExecutor | None = None #在工具执行前 / 后、对话开始 / 结束时触发自定义逻辑 ；事件触发器（插件系统）
+    api_client: SupportsStreamingMessages
+    tool_registry: ToolRegistry
+    permission_checker: PermissionChecker
+    cwd: Path
+    model: str
+    system_prompt: str
+    max_tokens: int
+    effort: str | None = None
+    context_window_tokens: int | None = None
+    auto_compact_threshold_tokens: int | None = None
+    permission_prompt: PermissionPrompt | None = None
+    ask_user_prompt: AskUserPrompt | None = None
+    max_turns: int | None = 200
+    hook_executor: HookExecutor | None = None
     tool_metadata: dict[str, object] | None = None
-    #AI 的长期记忆 + 任务进度条：存放工具执行的临时状态、记忆、任务进度：最近读了哪些文件、当前任务目标、激活的文档、异步任务状态
 
 """添加唯一元素到列表，超出长度限制则删除旧元素    """
 def _append_capped_unique(bucket: list[Any], value: Any, *, limit: int) -> None:
@@ -672,10 +670,11 @@ async def _preprocess_images_in_messages(
 调度执行工具：无工具调用则结束会话；有工具则单工具串行、多工具并发执行，调用_execute_tool_call落地执行，工具结果回填对话，进入下一轮循环
 """
 async def run_query(
-    context: QueryContext,  # 上下文：包含模型、工具、权限、配置等所有信息
-    messages: list[ConversationMessage],  # 对话历史列表
-) -> AsyncIterator[tuple[StreamEvent, UsageSnapshot | None]]: # 返回值：异步迭代器，不断输出【流式事件】和【令牌用量】
+    context: QueryContext,
+    messages: list[ConversationMessage],
+) -> AsyncIterator[tuple[StreamEvent, UsageSnapshot | None]]:
     """Run the conversation loop until the model stops requesting tools.
+
     Auto-compaction is checked at the start of each turn.  When the
     estimated token count exceeds the model's auto-compact threshold,
     the engine first tries a cheap microcompact (clearing old tool result
@@ -767,7 +766,6 @@ async def run_query(
                     f"using {effective_max_tokens}."
                 )
             ), None
-
         # --- auto-compact check before calling the model ---------------
             """====================== 步骤1：自动压缩对话
         coordinator2.1:每轮开始前检查 token,超了先轻量压缩（清理旧工具结果）,再超就 LLM 总结历史"""
@@ -784,6 +782,7 @@ async def run_query(
         # ====================== 步骤2：图片预处理：不支持多模态的模型 → 把图片转成文字描述
         async for event in _preprocess_images_in_messages(messages, context):
             yield event, None
+        # -----------------------------------------------------------------------------
 
         # ====================== 步骤3：调用AI模型流式输出 ======================
         final_message: ConversationMessage | None = None
@@ -802,10 +801,11 @@ async def run_query(
             async for event in context.api_client.stream_message(
                 ApiMessageRequest(
                     model=context.model,
-                    messages=messages,    # messages全部对话历史
-                    system_prompt=context.system_prompt,# ！！！4. 把全局注册好的技能传给 AI
-                    max_tokens=effective_max_tokens,   # 安全token上限
-                    tools=context.tool_registry.to_api_schema(),  # 给模型看的工具列表；to_api_schema把工具转换成AI能理解的API格式
+                    messages=messages,
+                    system_prompt=context.system_prompt,
+                    max_tokens=effective_max_tokens,
+                    tools=context.tool_registry.to_api_schema(),
+                    effort=context.effort,
                 )
             ):
                 # 如果是文本增量 → 直接流式返回
@@ -913,7 +913,7 @@ async def run_query(
                         "stop_reason": "tool_uses_empty",
                     },
                 )
-            return # 退出，对话结束
+            return
 
         # ====================== 开始执行工具 ======================
         tool_calls = final_message.tool_uses # AI要调用的工具列表，里面包含 send_message 调用
@@ -930,6 +930,15 @@ async def run_query(
             result = await _execute_tool_call(context, tc.name, tc.id, tc.input)
 
             # 发送事件：工具执行完成
+            try:
+                result = await _execute_tool_call(context, tc.name, tc.id, tc.input)
+            except Exception as exc:
+                log.exception("tool execution raised: name=%s id=%s", tc.name, tc.id)
+                result = ToolResultBlock(
+                    tool_use_id=tc.id,
+                    content=f"Tool {tc.name} failed: {type(exc).__name__}: {exc}",
+                    is_error=True,
+                )
             yield ToolExecutionCompleted(
                 tool_name=tc.name,
                 output=result.content,
@@ -937,9 +946,8 @@ async def run_query(
                 metadata=result.result_metadata,
             ), None
             tool_results = [result]
-
         else:# 情况2：多个工具 → 并发执行
-            # 先全部发送“开始执行”事件  Multiple tools: execute concurrently, emit events after
+            # Multiple tools: execute concurrently, emit events after
             for tc in tool_calls:
                 yield ToolExecutionStarted(tool_name=tc.name, tool_input=tc.input), None
 
@@ -1026,13 +1034,11 @@ AI 说：我要用 bash 命令
 把结果带回给 AI
  """
 async def _execute_tool_call(
-    context: QueryContext,# 本次对话的全部上下文（配置、模型、权限、状态）
-    tool_name: str, # 要执行的工具名称（如 bash, read_file, web_search）
-    tool_use_id: str, # 工具调用的唯一ID（用于和AI的请求对应）
-    tool_input: dict[str, object], # 工具参数（AI传过来的）
-) -> ToolResultBlock: # 返回值：工具执行结果块
-
-    """1、执行前插件检查（PRE_TOOL_USE） 插件可以在这里拦截、记录、修改工具调用; 插件说 “阻止” → 直接不执行"""
+    context: QueryContext,
+    tool_name: str,
+    tool_use_id: str,
+    tool_input: dict[str, object],
+) -> ToolResultBlock:
     if context.hook_executor is not None:
         """工具执行前:触发各类系统生命周期事件，由 HookExecutor 调度执行各类钩子逻辑。"""
         pre_hooks = await context.hook_executor.execute(
@@ -1086,7 +1092,6 @@ async def _execute_tool_call(
 
     # 解析工具要执行的命令（如 bash 命令） _extract_permission_command提取工具调用中的执行命令，用于权限校验
     _command = _extract_permission_command(tool_input, parsed_input)
-    # 日志：打印权限检查信息
     log.debug("permission check: %s read_only=%s path=%s cmd=%s",
               tool_name, tool.is_read_only(parsed_input), _file_path, _command and _command[:80])
 

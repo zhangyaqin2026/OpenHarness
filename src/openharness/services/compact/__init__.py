@@ -494,6 +494,7 @@ def build_post_compact_messages(result: CompactionResult) -> list[ConversationMe
         *hook_messages,
     ]
 
+
 def _boundary_crosses_tool_pair(previous: ConversationMessage, current: ConversationMessage) -> bool:
     """Return True when a preserve boundary would split a tool_use/result pair."""
 
@@ -915,6 +916,29 @@ def _build_session_memory_message(messages: list[ConversationMessage]) -> Conver
         "Session memory summary from earlier in this conversation:\n" + body
     )
 
+
+def _build_file_session_memory_message(metadata: dict[str, Any] | None) -> ConversationMessage | None:
+    """Build a compaction message from the persisted session-memory file."""
+
+    if not metadata:
+        return None
+    path = metadata.get("session_memory_path")
+    if not path:
+        return None
+    try:
+        from openharness.services.session_memory import (
+            get_session_memory_content,
+            session_memory_to_compact_text,
+        )
+
+        text = session_memory_to_compact_text(get_session_memory_content(str(path)))
+    except Exception:
+        return None
+    if not text.strip():
+        return None
+    return ConversationMessage.from_user_text(text)
+
+
 """轻量级对话压缩工具，在调用 AI 压缩前使用。先判断消息数量是否满足压缩条件，不满足则直接退出；
 将消息分为历史和最新两部分，把历史转为精简记忆摘要。
 若压缩后 token 和消息数未减少则退出，否则记录压缩信息，生成压缩结果，返回压缩后数据，高效降低对话长度。"""
@@ -932,6 +956,8 @@ def try_session_memory_compaction(
         return None
 # 消息总数过少，无需压缩，直接返回空
     older, newer = _split_preserving_tool_pairs(messages, preserve_recent=preserve_recent)
+    file_summary_message = _build_file_session_memory_message(metadata)
+    summary_message = file_summary_message or _build_session_memory_message(older)
 # 将消息拆分为历史消息older和需要保留的最新消息newer
     summary_message = _build_session_memory_message(older)
 # 把历史消息打包成精简的会话记忆摘要
@@ -953,6 +979,7 @@ def try_session_memory_compaction(
         "pre_compact_token_count": estimate_message_tokens(messages),
         "preserve_recent": preserve_recent,
         "used_session_memory": True,
+        "used_file_session_memory": file_summary_message is not None,
         "pre_compact_discovered_tools": _extract_discovered_tools(older),
         "attachments": _extract_attachment_paths(older),
     }

@@ -51,6 +51,7 @@ class QueryEngine:
         self._model = model
         self._system_prompt = system_prompt
         self._max_tokens = max_tokens
+        self._effort = settings.effort if settings is not None else None
         self._context_window_tokens = context_window_tokens
         self._auto_compact_threshold_tokens = auto_compact_threshold_tokens
         self._max_turns = max_turns
@@ -112,6 +113,10 @@ class QueryEngine:
     def set_model(self, model: str) -> None:
         """Update the active model for future turns."""
         self._model = model
+
+    def set_effort(self, effort: str | None) -> None:
+        """Update the active reasoning effort for future turns."""
+        self._effort = effort
 
     """更新对话使用的 API 客户端。  """
     def set_api_client(self, api_client: SupportsStreamingMessages) -> None:
@@ -185,6 +190,63 @@ class QueryEngine:
             **kwargs,
         )
 
+    def _prepare_session_memory(self) -> None:
+        """Expose file-backed session memory to compaction when enabled."""
+
+        if self._settings is None or not self._settings.memory.session_memory_enabled:
+            return
+        if not self._settings.memory.enabled:
+            return
+        from openharness.services.session_memory import prepare_session_memory_metadata
+
+        prepare_session_memory_metadata(
+            self._cwd,
+            self._tool_metadata,
+            session_id=str(self._tool_metadata.get("session_id") or "default"),
+        )
+
+    async def _update_session_memory(self) -> None:
+        """Persist a session checkpoint after a user turn."""
+
+        if self._settings is None or not self._settings.memory.session_memory_enabled:
+            return
+        if not self._settings.memory.enabled:
+            return
+        from openharness.services.session_memory import update_session_memory_file
+
+        update_session_memory_file(
+            self._cwd,
+            list(self._messages),
+            tool_metadata=self._tool_metadata,
+            session_id=str(self._tool_metadata.get("session_id") or "default"),
+        )
+
+    async def _extract_durable_memories(self) -> None:
+        """Run the optional durable memory extraction pass."""
+
+        if self._settings is None or not self._settings.memory.auto_extract_enabled:
+            return
+        if not self._settings.memory.enabled:
+            return
+        from openharness.services.memory_extract import extract_memories_from_turn
+
+        try:
+            result = await extract_memories_from_turn(
+                cwd=self._cwd,
+                api_client=self._api_client,
+                model=self._model,
+                messages=list(self._messages),
+                max_records=self._settings.memory.auto_extract_max_records,
+            )
+        except Exception as exc:
+            self._tool_metadata["memory_extract_last_error"] = str(exc)
+            return
+        self._tool_metadata["memory_extract_last"] = {
+            "skipped": result.skipped,
+            "reason": result.reason,
+            "written_paths": [str(path) for path in result.written_paths],
+        }
+
     """！判断能不能接续
     判断对话是否存在未完成的工具调用，需要继续交互。    """
     # 定义方法，返回布尔值：是否有未完成的工具调用
@@ -235,6 +297,7 @@ run_query 内部：模型决定是否调用 Skill
          作用：让 AI 记住 “用户想干什么”，多轮对话不忘事"""
         if user_message.text.strip() and not self._tool_metadata.pop("_suppress_next_user_goal", False):
             remember_user_goal(self._tool_metadata, user_message.text)
+        self._prepare_session_memory()
 
         """清理对话历史 + 加入用户消息   
         sanitize：清理脏数据、空消息，保证对话合法;  append：把用户这句话加到历史记录里;  作用：AI 才能看到上下文"""
@@ -262,6 +325,7 @@ run_query 内部：模型决定是否调用 Skill
             model=self._model,
             system_prompt=self._system_prompt,
             max_tokens=self._max_tokens,
+            effort=self._effort,
             context_window_tokens=self._context_window_tokens,
             auto_compact_threshold_tokens=self._auto_compact_threshold_tokens,
             max_turns=self._max_turns,
@@ -295,6 +359,8 @@ run_query 内部：模型决定是否调用 Skill
                 # 把事件流式返回出去
                 yield event
         finally:
+            await self._update_session_memory()
+            await self._extract_durable_memories()
             """无论成功失败，最后都执行auto_dream = 自动总结、自动记忆、自动整理对话"""
             self._schedule_auto_dream()
 
@@ -302,6 +368,8 @@ run_query 内部：模型决定是否调用 Skill
     接续未完成的对话，不新增用户消息，继续执行中断的工具调用，流式返回结果并统计成本。  """
     async def continue_pending(self, *, max_turns: int | None = None) -> AsyncIterator[StreamEvent]:
         """Continue an interrupted tool loop without appending a new user message."""
+        self._prepare_session_memory()
+        self._messages = sanitize_conversation_messages(self._messages)
         # 创建查询上下文
         context = QueryContext(
             api_client=self._api_client,
@@ -311,6 +379,7 @@ run_query 内部：模型决定是否调用 Skill
             model=self._model,
             system_prompt=self._system_prompt,
             max_tokens=self._max_tokens,
+            effort=self._effort,
             context_window_tokens=self._context_window_tokens,
             auto_compact_threshold_tokens=self._auto_compact_threshold_tokens,
             max_turns=max_turns if max_turns is not None else self._max_turns,
@@ -326,3 +395,5 @@ run_query 内部：模型决定是否调用 Skill
                 self._cost_tracker.add(usage)
             # 流式返回事件
             yield event
+        await self._update_session_memory()
+        await self._extract_durable_memories()

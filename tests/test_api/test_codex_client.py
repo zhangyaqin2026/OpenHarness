@@ -188,9 +188,10 @@ async def test_codex_client_streams_text(monkeypatch):
 
     client = CodexApiClient(_fake_codex_token())
     request = ApiMessageRequest(
-        model="gpt-5.4",
+        model="gpt-5.5",
         messages=[ConversationMessage.from_user_text("hi")],
         system_prompt="Be helpful.",
+        effort="xhigh",
     )
     events = [event async for event in client.stream_message(request)]
 
@@ -201,6 +202,8 @@ async def test_codex_client_streams_text(monkeypatch):
     assert complete.usage.output_tokens == 3
     assert sink["url"].endswith("/codex/responses")
     assert sink["json"]["instructions"] == "Be helpful."
+    assert sink["json"]["model"] == "gpt-5.5"
+    assert sink["json"]["reasoning"] == {"effort": "xhigh"}
     assert sink["headers"]["OpenAI-Beta"] == "responses=experimental"
 
 

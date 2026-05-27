@@ -424,6 +424,7 @@ def _build_dry_run_preview(
     api_key: str | None,
     api_format: str | None,
     permission_mode: str | None,
+    effort: str | None = None,
 ) -> dict[str, object]:
     from openharness.api.provider import auth_status, detect_provider
     from openharness.commands import create_default_command_registry
@@ -448,6 +449,7 @@ def _build_dry_run_preview(
         api_key=api_key,
         api_format=api_format,
         permission_mode=permission_mode,
+        effort=effort,
     )
     """5. 检测 AI 服务提供商 + 授权状态"""
     provider = detect_provider(settings) #根据配置判断是 OpenAI / Anthropic 等服务商
@@ -2195,7 +2197,7 @@ def main(
     effort: str | None = typer.Option(
         None,
         "--effort",
-        help="Effort level for the session (low, medium, high, max)",
+        help="Effort level for the session (low, medium, high, xhigh/max)",
         rich_help_panel="Model & Effort",
     ),
     verbose: bool = typer.Option(
@@ -2395,6 +2397,7 @@ def main(
             api_key=api_key,
             api_format=api_format,
             permission_mode=permission_mode,
+            effort=effort,
         )
         effective_output_format = output_format or "text"
         if effective_output_format == "text":
@@ -2469,6 +2472,7 @@ def main(
                 restore_tool_metadata=session_data.get("tool_metadata"),
                 permission_mode=permission_mode,
                 api_format=api_format,
+                effort=effort,
             )
         )
         return
@@ -2491,6 +2495,7 @@ def main(
                 api_format=api_format,
                 permission_mode=permission_mode,
                 max_turns=max_turns,
+                effort=effort,
             )
         )
         return
@@ -2506,6 +2511,7 @@ def main(
                 api_key=api_key,
                 api_format=api_format,
                 permission_mode=permission_mode,
+                effort=effort,
             )
         )
         return
@@ -2522,5 +2528,6 @@ def main(
             api_key=api_key,
             api_format=api_format,
             permission_mode=permission_mode,
+            effort=effort,
         )
     )

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from openharness.config.settings import Settings
 from openharness.memory.paths import get_project_memory_dir
+from openharness.memory.usage import find_stale_memory_candidates
 from openharness.services.autodream.backup import create_memory_backup, diff_memory_dirs
 from openharness.services.autodream.lock import (
     list_sessions_touched_since,
@@ -155,12 +156,20 @@ async def start_dream_now(
     before = _memory_files_mtime_snapshot(resolved_memory_dir)
     #非预览模式 → 自动备份整个记忆目录  防止整理出错，可回滚。"""
     backup_dir = create_memory_backup(resolved_memory_dir, app_label=app_label) if not preview else None
+    stale_candidates = find_stale_memory_candidates(cwd, memory_dir=resolved_memory_dir)
+    stale_section = "\n".join(
+        f"- {header.id or header.path.name}: {header.path.name} "
+        f"(importance={header.importance}, updated_at={header.updated_at or 'unknown'})"
+        for header in stale_candidates[:20]
+    ) or "- (none)"
     extra = (
         f"Application context: `{app_label}`.\n"
         "Tool constraints for this run: only modify files under the memory directory. "
         "Use shell commands only for read-only inspection.\n\n"
         f"Sessions since last consolidation ({len(session_ids)}):\n"
         + "\n".join(f"- {session_id}" for session_id in session_ids)
+        + "\n\nUsage-based stale candidates:\n"
+        + stale_section
     )
     """!!!核心：构建记忆整理提示词
     让 LLM 做：读取会话、提取关键信息、合并旧记忆、去重、精简、结构化、写入 memory 文件"""
