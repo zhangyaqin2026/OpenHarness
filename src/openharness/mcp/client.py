@@ -21,7 +21,10 @@ from openharness.mcp.types import (
     McpToolInfo,
 )
 
-
+"""MCP 全称 Model Context Protocol（模型上下文协议）
+它是一个通用、标准化的通信协议，解决 AI 模型与外部工具 / 数据源连接的问题：
+让 AI 助手（比如 OpenHarness）可以通过统一方式调用外部工具、读取文件、访问数据库、执行系统命令，不用为每个工具单独写适配器。
+"""
 class McpServerNotConnectedError(Exception):
     """Raised when an MCP server is not connected or its session has been lost."""
 

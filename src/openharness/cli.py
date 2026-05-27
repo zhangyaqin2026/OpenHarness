@@ -41,6 +41,18 @@ _PREVIEW_STOPWORDS = {
     "with",
 }
 
+""" 基于 Typer 开发的OpenHarness AI 编程助手命令行工具，核心实现：提供交互式会话、单条指令执行；
+支持 dry-run 预览运行环境、配置、工具、命令等信息；管理 MCP 服务、插件、认证、定时任务、自动任务等功能；
+处理指令匹配、文本处理、配置校验、推荐匹配，让用户无需真实执行就能检查环境、权限、配置，也能正常使用 AI 助手完成开发任务。
+   
+   
+_build_dry_run_preview：dry-run 功能核心，生成所有预览数据
+_evaluate_dry_run_readiness：判断程序是否就绪运行
+_validate_mcp_server：校验 MCP 服务配置
+main：程序总入口，处理所有命令和参数
+_recommend_preview_candidates：智能推荐技能 / 工具 / 指令
+"""
+
 
 def _safe_short(text: str, *, limit: int = 140) -> str:
     normalized = " ".join(text.split())
@@ -249,7 +261,7 @@ def _candidate_entry(name: str, description: str, *, score: int, reasons: list[s
         "reasons": reasons,
     }
 
-
+"""智能推荐技能 / 工具 / 指令"""
 def _recommend_preview_candidates(
     prompt: str | None,
     *,
@@ -392,16 +404,23 @@ def _evaluate_dry_run_readiness(
 
     return {"level": level, "reasons": reasons, "next_actions": deduped_actions}
 
+"""功能：生成不执行任何操作的「试运行预览报告」，诊断配置、展示可用功能、判断执行入口
+输入：用户输入 + 运行配置 + 工作目录
+输出：完整结构化预览字典（给前端 / 调试使用）
+核心价值：安全、无副作用、提前展示运行结果\
 
+
+提前告诉你：如果现在真实运行，会发生什么？配置是否正确？有哪些可用功能？会执行哪一步？
+它是给前端 / 调试 / 用户预览用的配置 + 运行环境 + 执行入口诊断工具。"""
 def _build_dry_run_preview(
     *,
-    prompt: str | None,
-    cwd: str,
-    model: str | None,
-    max_turns: int | None,
-    base_url: str | None,
-    system_prompt: str | None,
-    append_system_prompt: str | None,
+    prompt: str | None,#用户输入的提示词 / 命令
+    cwd: str, #当前工作目录（运行程序的文件夹路径），必传
+    model: str | None, #AI 模型名称
+    max_turns: int | None, #最大对话轮次，覆盖配置
+    base_url: str | None, #AI 接口基础地址（自建模型 / 代理地址），覆盖配置
+    system_prompt: str | None, #系统提示词，覆盖配置
+    append_system_prompt: str | None, #追加到现有系统提示词的内容（不覆盖，只拼接）
     api_key: str | None,
     api_format: str | None,
     permission_mode: str | None,
@@ -416,7 +435,11 @@ def _build_dry_run_preview(
     from openharness.tools import create_default_tool_registry
     from openharness.ui.runtime import _resolve_api_client_from_settings
 
+    """3、 解析工作目录Path(cwd)：把传入的路径转成 Path 对象（方便处理路径） resolve()：转成绝对路径"""
     resolved_cwd = str(Path(cwd).expanduser().resolve())
+    """4、加载并合并配置 load_settings()：加载框架默认配置 + 配置文件; 
+    merge_cli_overrides()：用函数传入的参数覆盖配置文件
+    结果：得到最终生效的完整配置"""
     settings = load_settings().merge_cli_overrides(
         model=model,
         max_turns=max_turns,
@@ -426,10 +449,15 @@ def _build_dry_run_preview(
         api_format=api_format,
         permission_mode=permission_mode,
     )
-    provider = detect_provider(settings)
-    auth = auth_status(settings)
-    profile_name, profile = settings.resolve_profile()
+    """5. 检测 AI 服务提供商 + 授权状态"""
+    provider = detect_provider(settings) #根据配置判断是 OpenAI / Anthropic 等服务商
+    auth = auth_status(settings) #检查 API Key 是否有效，返回授权状态
+    profile_name, profile = settings.resolve_profile() #获取当前使用的配置文件名称和配置
 
+    """ 6、加载插件 + 注册命令:   load_plugins：加载所有启用的插件
+plugin_commands：收集所有插件提供的斜杠命令（如 /ls /run）
+create_default_command_registry：创建命令注册表
+command_match：如果用户输入了 prompt，匹配是否是斜杠命令"""
     plugins = load_plugins(settings, resolved_cwd)
     plugin_commands = [
         command
@@ -439,10 +467,14 @@ def _build_dry_run_preview(
     ]
     command_registry = create_default_command_registry(plugin_commands=plugin_commands)
     command_match = command_registry.lookup(prompt) if prompt else None
+    """7、加载技能 + 工具 + MCP 服务: skills：框架内置 / 插件提供的技能（自动化能力）
+mcp_servers：加载外部 MCP 服务配置（不启动，只读取）
+tool_registry：注册所有可用工具（文件操作、网络等）"""
     skill_registry = load_skill_registry(resolved_cwd, settings=settings)
     skills = skill_registry.list_skills()
     mcp_servers = load_mcp_server_configs(settings, plugins)
     tool_registry = create_default_tool_registry()
+    """8. 格式化工具 schema（给前端展示）:把工具的接口描述转成前端友好的格式,包含工具名、描述、参数预览"""
     tool_schemas = []
     for tool_schema in tool_registry.to_api_schema():
         args_preview = _schema_argument_preview(tool_schema)
@@ -453,7 +485,8 @@ def _build_dry_run_preview(
                 **args_preview,
             }
         )
-
+    """9. 验证 API 客户端是否可用:尝试初始化 AI 客户端，不真正发起请求
+          捕获错误，返回验证结果：正常 / 异常;    redirect_stderr：屏蔽错误日志输出，只捕获结果 """
     client_validation = {"status": "ok", "detail": ""}
     try:
         with redirect_stderr(StringIO()):
@@ -462,7 +495,7 @@ def _build_dry_run_preview(
         client_validation = {"status": "error", "detail": "runtime client could not be resolved with current auth/config"}
     except Exception as exc:  # pragma: no cover - defensive diagnostic path
         client_validation = {"status": "error", "detail": str(exc)}
-
+    """10. 处理追加系统提示词:清理用户输入的 prompt; 如果传入了 append_system_prompt，追加到原有系统提示词（不覆盖）"""
     preview_prompt = prompt.strip() if prompt else None
     prompt_seed = preview_prompt
     if append_system_prompt:
@@ -470,12 +503,13 @@ def _build_dry_run_preview(
         if appended:
             existing = settings.system_prompt or ""
             settings = settings.model_copy(update={"system_prompt": f"{existing}\n\n{appended}".strip()})
+    """11. 构建最终运行时系统提示词:把配置、目录、用户输入拼接成最终给 AI 的系统提示词    """
     system_prompt_text = build_runtime_system_prompt(
         settings,
         cwd=resolved_cwd,
         latest_user_prompt=prompt_seed,
     )
-
+    """12. 格式化所有命令信息:收集所有命令的名称、描述、权限、行为 """
     command_entries = []
     for command in command_registry.list_commands():
         behavior = _dry_run_command_behavior(command.name)
@@ -488,16 +522,20 @@ def _build_dry_run_preview(
                 "behavior": behavior,
             }
         )
-
+    """13. 生成功能推荐:根据用户输入，推荐最合适的命令 / 技能 / 工具"""
     recommendations = _recommend_preview_candidates(
         preview_prompt,
         skills=skills,
         tool_schemas=tool_schemas,
         command_entries=command_entries,
     )
-
+    """14. 判断执行入口（核心逻辑）: 这是dry-run 最核心的功能：判断真实运行时会执行什么
+有效 /命令 → 执行斜杠命令
+无效 /命令 → 报错
+普通文本 → 调用 AI
+无输入 → 等待用户输入"""
     if preview_prompt:
-        if preview_prompt.startswith("/") and command_match is not None:
+        if preview_prompt.startswith("/") and command_match is not None:#匹配到有效斜杠命令
             matched_command = command_match[0]
             behavior = _dry_run_command_behavior(matched_command.name)
             entrypoint = {
@@ -514,11 +552,11 @@ def _build_dry_run_preview(
                 ),
             }
         elif preview_prompt.startswith("/") and command_match is None:
-            entrypoint = {
+            entrypoint = { # 无效斜杠命令
                 "kind": "unknown_slash_command",
                 "detail": "Input starts with / but does not match a registered slash command.",
             }
-        else:
+        else: # 普通提示词 → 调用AI模型
             entrypoint = {
                 "kind": "model_prompt",
                 "detail": (
@@ -526,12 +564,12 @@ def _build_dry_run_preview(
                     "Exact tool calls and parameters are decided by the model at runtime."
                 ),
             }
-    else:
+    else:# 无输入 → 启动交互式会话
         entrypoint = {
             "kind": "interactive_session",
             "detail": "OpenHarness would start and wait for user input. No model or tool call happens until you submit one.",
         }
-
+    """15. 组装最终预览字典: 把前面所有计算结果，整合为一个完整预览字典"""
     preview = {
         "mode": "dry-run",
         "cwd": resolved_cwd,
@@ -585,6 +623,7 @@ def _build_dry_run_preview(
         ],
         "system_prompt_preview": _safe_short(system_prompt_text, limit=600),
     }
+    """16. 统计 MCP 服务错误 + 评估整体就绪状态:统计 MCP 服务配置错误数量,评估整体是否就绪可以运行"""
     mcp_errors = sum(1 for entry in preview["mcp_servers"] if entry.get("status") == "error")
     preview["validation"]["mcp_errors"] = mcp_errors
     preview["readiness"] = _evaluate_dry_run_readiness(
@@ -592,6 +631,7 @@ def _build_dry_run_preview(
         entrypoint=preview["entrypoint"],
         validation=preview["validation"],
     )
+    """17. 返回结果: 把完整的 dry-run 预览字典返回给调用方"""
     return preview
 
 
@@ -2106,7 +2146,11 @@ def provider_remove(
 # ---------------------------------------------------------------------------
 # Main command
 # ---------------------------------------------------------------------------
-
+""" ！！！整个程序的总入口，所有命令最终都由此执行。  
+ OpenHarness 工具的命令行主入口函数 main，基于 Typer 框架实现。
+ 它接收版本、会话、AI 模型、输出格式、权限、系统提示等大量命令行参数，负责统一调度工具的所有功能：先处理子命令、日志、权限、主题，
+ 再根据参数分支执行试运行预览、恢复会话、单次指令输出、后台任务，无参数时默认启动交互式 AI 对话，是整个工具的核心调度中枢。
+ """
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -2296,12 +2340,13 @@ def main(
     ),
 ) -> None:
     """Start an interactive session or run a single prompt."""
+    """如果用户执行了子命令，主函数直接退出，不执行后续逻辑。"""
     if ctx.invoked_subcommand is not None:
         return
 
     import asyncio
     import logging
-
+    """开启 debug 则启用调试日志；未开启则读取环境变量配置日志等级。"""
     if debug:
         logging.basicConfig(
             level=logging.DEBUG,
@@ -2313,10 +2358,12 @@ def main(
         lvl = getattr(logging, os.environ["OPENHARNESS_LOG_LEVEL"].upper(), logging.WARNING)
         logging.basicConfig(level=lvl, format="%(asctime)s [%(name)s] %(levelname)s %(message)s", stream=sys.stderr)
 
+    """开启跳过权限校验时，强制将权限模式设为全自动执行。"""
     if dangerously_skip_permissions:
         permission_mode = "full_auto"
 
     # Apply --theme override to settings
+    """传入主题参数时，加载配置并修改主题，然后保存新配置。"""
     if theme:
         from openharness.config.settings import load_settings, save_settings
 
@@ -2326,10 +2373,12 @@ def main(
 
     from openharness.ui.app import run_print_mode, run_repl, run_task_worker
 
+    """试运行模式不支持恢复 / 续期会话，检测到同时使用则报错退出。"""
     if dry_run and (continue_session or resume is not None):
         print("Error: --dry-run does not support --continue/--resume yet.", file=sys.stderr)
         raise typer.Exit(1)
 
+    """启用试运行模式，生成运行配置预览，按指定格式输出结果后退出。"""
     if dry_run:
         prompt = print_mode.strip() if print_mode is not None else None
         if print_mode is not None and not prompt:
@@ -2363,6 +2412,7 @@ def main(
         return
 
     # Handle --continue and --resume flags
+    """恢复 / 续期历史会话，加载会话数据后启动交互式对话，完成后退出。"""
     if continue_session or resume is not None:
         from openharness.services.session_storage import (
             list_session_snapshots,
@@ -2422,7 +2472,7 @@ def main(
             )
         )
         return
-
+    """执行单次指令，输出结果后直接退出，不进入交互模式。"""
     if print_mode is not None:
         prompt = print_mode.strip()
         if not prompt:
@@ -2444,7 +2494,7 @@ def main(
             )
         )
         return
-
+    """启动后台任务工作器，处理无头后台自动化任务。"""
     if task_worker:
         asyncio.run(
             run_task_worker(
@@ -2459,7 +2509,7 @@ def main(
             )
         )
         return
-
+    """无任何特殊参数时，默认启动交互式 AI 命令行会话。"""
     asyncio.run(
         run_repl(
             prompt=None,

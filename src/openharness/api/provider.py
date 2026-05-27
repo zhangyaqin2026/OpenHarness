@@ -28,6 +28,12 @@ _VOICE_REASON: dict[str, str] = {
     "anthropic_claude": "voice mode is not supported for Claude subscription auth",
 }
 
+""" AI 服务提供商与权限能力检测工具，自动识别 AI 厂商、认证类型、语音 / 多模态支持状态，提供认证状态查询，
+为 UI 展示和系统诊断提供基础能力判断。  
+
+detect_provider()：识别 AI 服务商，是整个系统对接不同模型的基础
+is_model_multimodal()：判断模型能否看图，决定是否启用图片能力
+两个核心函数支撑AI 模型自动适配、能力自动开关"""
 
 @dataclass(frozen=True)
 class ProviderInfo:

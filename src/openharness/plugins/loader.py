@@ -32,21 +32,29 @@ from openharness.skills.types import SkillDefinition
 
 logger = logging.getLogger(__name__)
 
+""" OpenHarness 的插件发现与加载核心，负责查找插件目录、读取配置、加载插件包含的技能、命令、代理、工具、钩子等所有功能，
+是插件系统运行的基础。
 
+load_plugins：插件系统总入口
+load_plugin：加载单个插件的核心函数
+discover_plugin_paths：查找插件位置
+"""
+
+"""获取用户全局插件目录"""
 def get_user_plugins_dir() -> Path:
     """Return the user plugin directory."""
     path = get_config_dir() / "plugins"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
-
+"""获取项目本地插件目录"""
 def get_project_plugins_dir(cwd: str | Path) -> Path:
     """Return the project plugin directory."""
     path = Path(cwd).resolve() / ".openharness" / "plugins"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
-
+"""查找插件配置文件plugin.json"""
 def _find_manifest(plugin_dir: Path) -> Path | None:
     """Find plugin.json in standard or .claude-plugin/ locations."""
     for candidate in [
@@ -57,7 +65,7 @@ def _find_manifest(plugin_dir: Path) -> Path | None:
             return candidate
     return None
 
-
+"""!!重点：扫描所有有效插件路径"""
 def discover_plugin_paths(cwd: str | Path, extra_roots: Iterable[str | Path] | None = None) -> list[Path]:
     """Find plugin directories from user and project locations."""
     roots = [get_user_plugins_dir(), get_project_plugins_dir(cwd)]
@@ -77,7 +85,7 @@ def discover_plugin_paths(cwd: str | Path, extra_roots: Iterable[str | Path] | N
                 paths.append(path)
     return paths
 
-
+"""按配置权限筛选插件路径"""
 def discover_plugin_paths_for_settings(
     settings,
     cwd: str | Path,
@@ -103,7 +111,7 @@ def discover_plugin_paths_for_settings(
                 paths.append(path)
     return paths
 
-
+"""核心重点：!!!加载所有插件并返回"""
 def load_plugins(settings, cwd: str | Path, extra_roots: Iterable[str | Path] | None = None) -> list[LoadedPlugin]:
     """Load plugins from disk."""
     project_plugins_dir = get_project_plugins_dir(cwd)
@@ -122,7 +130,7 @@ def load_plugins(settings, cwd: str | Path, extra_roots: Iterable[str | Path] | 
             plugins.append(plugin)
     return plugins
 
-
+"""!!!核心重点：加载单个插件，解析所有功能"""
 def load_plugin(path: Path, enabled_plugins: dict[str, bool]) -> LoadedPlugin | None:
     """Load one plugin directory."""
     manifest_path = _find_manifest(path)
@@ -247,7 +255,7 @@ def _command_name_from_file(file_path: Path, base_dir: Path, plugin_name: str) -
         else f"{plugin_name}:{command_base_name}"
     )
 
-
+"""加载插件中的技能"""
 def _load_plugin_skills(path: Path) -> list[SkillDefinition]:
     """Load plugin skills using Claude Code's directory SKILL.md layout."""
     if not path.exists():
@@ -316,7 +324,7 @@ def _coerce_path_list(raw: Any) -> list[str]:
         return [str(item) for item in raw]
     return []
 
-
+"""加载插件中的命令"""
 def _load_plugin_commands(path: Path, manifest: PluginManifest) -> list[PluginCommandDefinition]:
     commands: list[PluginCommandDefinition] = []
     seen: set[Path] = set()
@@ -475,7 +483,7 @@ def _load_single_command_file(
         display_name=str(display_name) if isinstance(display_name, str) else None,
     )
 
-
+"""加载插件中的代理"""
 def _load_plugin_agents(path: Path, manifest: PluginManifest) -> list[AgentDefinition]:
     agents: list[AgentDefinition] = []
     seen: set[Path] = set()
@@ -617,7 +625,7 @@ def _load_single_agent_file(
         source="plugin",
     )
 
-
+"""加载插件中的钩子"""
 def _load_plugin_hooks(path: Path) -> dict[str, list]:
     """Load hooks from a flat hooks.json file."""
     if not path.exists():
@@ -687,7 +695,7 @@ def _load_plugin_mcp(path: Path) -> dict[str, object]:
     parsed = McpJsonConfig.model_validate(raw)
     return parsed.mcpServers
 
-
+"""加载插件中的工具"""
 def _load_plugin_tools(path: Path, manifest: PluginManifest) -> list:
     """Discover and instantiate BaseTool subclasses from a plugin's tools/ directory."""
     from openharness.tools.base import BaseTool

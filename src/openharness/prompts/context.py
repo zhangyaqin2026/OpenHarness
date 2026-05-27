@@ -18,7 +18,15 @@ from openharness.prompts.claudemd import load_claude_md_prompt
 from openharness.prompts.system_prompt import build_system_prompt
 from openharness.skills.loader import load_skill_registry
 
+"""OpenHarness AI 助手的系统提示词组装工具，负责把基础规则、技能、任务、环境、记忆等内容拼接成完整指令发给大模型。
+核心就是拼装最终给 AI 看的完整指令。
 
+build_runtime_system_prompt = 最终生成 AI 指令的总入口
+_build_skills_section = 告诉 AI 自己有什么技能
+_build_delegation_section = 告诉 AI 怎么用子任务
+整体功能：拼装给 AI 看的完整系统指令"""
+
+"""生成 AI 可用的技能列表，告诉 AI 能调用哪些工具、怎么用。重点：让 AI 知道自己有什么能力。"""
 def _build_skills_section(
     cwd: str | Path,
     *,
@@ -51,7 +59,7 @@ def _build_skills_section(
         lines.append(f"- **{command_name}**{display}: {skill.description}")
     return "\n".join(lines)
 
-
+"""生成子任务 / 子代理说明，告诉 AI 什么时候可以拆分任务、用子 agent。"""
 def _build_delegation_section() -> str:
     """Build a concise section describing delegation and worker usage."""
     return "\n".join(
@@ -73,7 +81,7 @@ def _build_delegation_section() -> str:
         ]
     )
 
-
+"""!!!把所有提示词片段拼成最终完整指令。包括：基础规则 + 技能 + 环境 + 项目信息 + 记忆 + 任务配置。整个文件的灵魂。"""
 def build_runtime_system_prompt(
     settings: Settings,
     *,
@@ -84,26 +92,27 @@ def build_runtime_system_prompt(
     include_project_memory: bool = True,
 ) -> str:
     """Build the runtime system prompt with project instructions and memory."""
+    """如果是协调模式，用协调者专用提示词;  否则用普通系统提示词（支持自定义）"""
     if is_coordinator_mode():
         sections = [get_coordinator_system_prompt()]
     else:
         sections = [build_system_prompt(custom_prompt=settings.system_prompt, cwd=str(cwd))]
-
+    """非协调模式且没自定义提示词，重新生成默认提示词覆盖。"""
     if not is_coordinator_mode() and settings.system_prompt is None:
         sections[0] = build_system_prompt(cwd=str(cwd))
-
+    """开启快速模式，添加提示：简洁回答、少用工具、快速完成任务。"""
     if settings.fast_mode:
         sections.append(
             "# Session Mode\nFast mode is enabled. Prefer concise replies, minimal tool use, and quicker progress over exhaustive exploration."
         )
-
+    """添加推理配置，告诉 AI 努力程度、迭代次数，让 AI 按此执行。"""
     sections.append(
         "# Reasoning Settings\n"
         f"- Effort: {settings.effort}\n"
         f"- Passes: {settings.passes}\n"
         "Adjust depth and iteration count to match these settings while still completing the task."
     )
-
+    """生成技能列表，非协调模式就加到提示词里。"""
     skills_section = _build_skills_section(
         cwd,
         extra_skill_dirs=extra_skill_dirs,
@@ -112,18 +121,19 @@ def build_runtime_system_prompt(
     )
     if skills_section and not is_coordinator_mode():
         sections.append(skills_section)
-
+    """非协调模式，添加任务委托规则。"""
     if not is_coordinator_mode():
         sections.append(_build_delegation_section())
-
+    """加载项目目录里的 claude.md 自定义提示，有就加入。"""
     claude_md = load_claude_md_prompt(cwd)
     if claude_md:
         sections.append(claude_md)
-
+    """加载本地环境规则，有就加入提示词。"""
     local_rules = load_local_rules()
     if local_rules:
         sections.append(f"# Local Environment Rules\n\n{local_rules}")
 
+    """循环加载项目问题、PR 评论、仓库上下文文件，存在且有内容就加入提示词（最多 12000 字符）。"""
     for title, path in (
         ("Issue Context", get_project_issue_file(cwd)),
         ("Pull Request Comments", get_project_pr_comments_file(cwd)),
@@ -134,6 +144,7 @@ def build_runtime_system_prompt(
             if content:
                 sections.append(f"# {title}\n\n```md\n{content[:12000]}\n```")
 
+    """开启记忆功能，加载项目记忆并加入提示词。"""
     if include_project_memory and settings.memory.enabled:
         memory_section = load_memory_prompt(
             cwd,
@@ -141,7 +152,7 @@ def build_runtime_system_prompt(
         )
         if memory_section:
             sections.append(memory_section)
-
+        """根据用户最新输入，搜索相关记忆，读取内容并加入提示词，让 AI 知道历史相关信息。"""
         if latest_user_prompt:
             relevant = find_relevant_memories(
                 latest_user_prompt,
@@ -162,5 +173,5 @@ def build_runtime_system_prompt(
                         ]
                     )
                 sections.append("\n".join(lines))
-
+    """把所有片段用空行连接，过滤空内容，返回最终完整系统提示词。"""
     return "\n\n".join(section for section in sections if section.strip())

@@ -14,7 +14,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+"""用于收集电脑运行环境信息，获取系统、版本、目录、Python、Git、Shell 等数据，打包成EnvironmentInfo对象，
+给 AI 提示词提供环境上下文，让 AI 知道当前运行状态。
 
+EnvironmentInfo：环境信息的存储结构
+get_environment_info：总收集函数（最重点）
+作用：给 AI 提供当前电脑环境上下文
+"""
 @dataclass
 class EnvironmentInfo:
     """Snapshot of the current runtime environment."""
@@ -100,7 +106,7 @@ def detect_git_info(cwd: str) -> tuple[bool, str | None]:
 
     return True, branch
 
-
+"""!!调用上面所有函数，收集全部环境信息，打包返回。整个文件的入口函数，AI 获取环境信息全靠它。"""
 def get_environment_info(cwd: str | None = None) -> EnvironmentInfo:
     """Gather all environment information into an EnvironmentInfo snapshot."""
     if cwd is None:

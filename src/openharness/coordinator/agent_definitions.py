@@ -17,7 +17,22 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
+"""OpenHarness 的 AI 代理定义加载系统，定义代理配置规范、内置多种专用代理（通用、探索、规划、验证、工作者等），
+提供从文件加载自定义代理、统一获取所有代理、校验 MCP 服务依赖的功能，是系统创建和管理不同功能 AI 代理的核心模块。
+
+必须掌握的重点（核心）
+AgentDefinition：代理配置的标准数据结构，所有代理的基础
+load_agents_dir：加载自定义代理文件的核心函数
+get_all_agent_definitions：获取系统完整代理列表，统一管理内置 / 自定义代理
+总结
+代码是AI 代理定义与加载核心模块，规范代理配置、内置标准代理、支持自定义代理
+三个重点是代理配置模型、文件加载、全量代理获取，支撑系统创建和管理所有 AI 代理
+内置 7 种专用代理，覆盖代码探索、规划、实现、验证全流程
+
+"""
+
 #: Valid color names for agents (matches AgentColorName in TS).
+#定义代理可用的颜色、努力等级、权限模式、内存范围、隔离模式，统一规范配置选项。
 AGENT_COLORS: frozenset[str] = frozenset(
     {
         "red",
@@ -56,7 +71,11 @@ ISOLATION_MODES: tuple[str, ...] = ("worktree", "remote")
 # AgentDefinition model
 # ---------------------------------------------------------------------------
 
+"""核心重点，  4、子代理的配置定义，子代理（worker）的模板。
 
+全局代理配置仓库：统一定义所有代理（协调器的子代理）的模板、属性、系统提示词、权限、工具列表。
+所有被 Coordinator 创建的子代理（worker/Explore/Plan/verification 等），实例属性全部来源于此模块的 AgentDefinition。
+"""
 class AgentDefinition(BaseModel):
     """Full agent definition with all configuration fields.
 
@@ -136,7 +155,14 @@ class AgentDefinition(BaseModel):
 
 # ---------------------------------------------------------------------------
 # System-prompt constants (translated from TS built-in agent files)
+#预定义通用、探索、规划、验证、工作者等各类代理的专属工作指令，决定代理行为逻辑。
 # ---------------------------------------------------------------------------
+"""单独定义每一类代理的行为指令：
+_WORKER_SYSTEM_PROMPT：工作代理（编码、改代码、提提交）
+_EXPLORE_SYSTEM_PROMPT：代码探索代理（只读，查找文件 / 代码）
+_PLAN_SYSTEM_PROMPT：规划代理（架构设计、编写方案）
+_VERIFICATION_SYSTEM_PROMPT：验证代理（破坏性测试、校验结果）
+其余：通用代理、状态行配置、文档指南代理"""
 
 _SHARED_AGENT_PREFIX = (
     "You are an agent for Claude Code, Anthropic's official CLI for Claude. "
@@ -506,6 +532,16 @@ Complete the user's request by providing accurate, documentation-based guidance.
 # ---------------------------------------------------------------------------
 # Built-in agent definitions
 # ---------------------------------------------------------------------------
+"""内置通用、状态行设置、代码指南、探索、规划、工作者、验证 7 种标准代理，配置好提示词和工具权限。
+系统默认 7 种子代理，Coordinator 日常调度的核心对象：
+general-purpose：通用代理，全工具可用
+statusline-setup：终端状态栏配置专用代理
+claude-code-guide：文档 & 答疑代理
+Explore：代码探索（禁用编辑类工具）
+Plan：方案规划（禁用编辑类工具）
+worker：核心工作代理（编码、执行任务）
+verification：结果验证代理（后台运行）
+"""
 
 _BUILTIN_AGENTS: list[AgentDefinition] = [
     AgentDefinition(
@@ -619,7 +655,7 @@ _BUILTIN_AGENTS: list[AgentDefinition] = [
     ),
 ]
 
-
+#返回所有内置代理定义，供系统调用。
 def get_builtin_agent_definitions() -> list[AgentDefinition]:
     """Return the built-in agent definitions."""
     return list(_BUILTIN_AGENTS)
@@ -629,7 +665,7 @@ def get_builtin_agent_definitions() -> list[AgentDefinition]:
 # Markdown / YAML-frontmatter loader
 # ---------------------------------------------------------------------------
 
-
+#解析 Markdown 文件的 YAML 前置配置，分离配置信息和提示词内容。
 def _parse_agent_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     """Parse YAML frontmatter from a markdown file.
 
@@ -668,7 +704,7 @@ def _parse_agent_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     body = "\n".join(lines[end_index + 1 :]).strip()
     return frontmatter, body
 
-
+#工具函数，将逗号分隔字符串转为列表，统一解析配置格式。
 def _parse_str_list(raw: Any) -> list[str] | None:
     """Parse a comma-separated string or list into a list of strings."""
     if raw is None:
@@ -680,7 +716,7 @@ def _parse_str_list(raw: Any) -> list[str] | None:
         return items if items else None
     return None
 
-
+#工具函数，解析合法正整数，校验数字类配置合法性。
 def _parse_positive_int(raw: Any) -> int | None:
     """Parse a positive integer from frontmatter, returning None if invalid."""
     if raw is None:
@@ -691,7 +727,7 @@ def _parse_positive_int(raw: Any) -> int | None:
     except (TypeError, ValueError):
         return None
 
-
+"""核心重点，!!从指定目录加载.md 格式的自定义代理文件，解析配置并生成 AgentDefinition 对象。"""
 def load_agents_dir(directory: Path) -> list[AgentDefinition]:
     """Load agent definitions from .md files in *directory*.
 
@@ -896,12 +932,12 @@ def load_agents_dir(directory: Path) -> list[AgentDefinition]:
 # Public API
 # ---------------------------------------------------------------------------
 
-
+"""获取用户自定义代理的存放目录。"""
 def _get_user_agents_dir() -> Path:
     """Return the user agent definitions directory."""
     return get_config_dir() / "agents"
 
-
+"""!核心重点，合并内置、用户、插件代理，按优先级覆盖，返回系统所有可用代理。"""
 def get_all_agent_definitions() -> list[AgentDefinition]:
     """Return all agent definitions: built-in + user + plugin.
 
@@ -944,7 +980,7 @@ def get_all_agent_definitions() -> list[AgentDefinition]:
 
     return list(agent_map.values())
 
-
+"""根据代理名称查找并返回对应代理配置。"""
 def get_agent_definition(name: str) -> AgentDefinition | None:
     """Return the agent definition for *name*, or ``None`` if not found."""
     for agent in get_all_agent_definitions():
@@ -952,7 +988,7 @@ def get_agent_definition(name: str) -> AgentDefinition | None:
             return agent
     return None
 
-
+"""校验代理所需的 MCP 服务是否全部可用。"""
 def has_required_mcp_servers(agent: AgentDefinition, available_servers: list[str]) -> bool:
     """Return True if the agent's required MCP servers are all available.
 
@@ -966,7 +1002,7 @@ def has_required_mcp_servers(agent: AgentDefinition, available_servers: list[str
         for pattern in agent.required_mcp_servers
     )
 
-
+"""根据可用 MCP 服务过滤出符合条件的代理。"""
 def filter_agents_by_mcp_requirements(
     agents: list[AgentDefinition],
     available_servers: list[str],

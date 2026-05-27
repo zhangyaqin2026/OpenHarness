@@ -10,14 +10,20 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
+"""理解 LLM 和工具之间的数据交互格式，是看懂工具调用的基础;   
 
+定义了 AI 对话系统的消息数据结构，统一管理文本、图片、工具调用、工具结果等内容块，提供消息创建、序列化、清洗修复功能，
+是整个系统传递对话信息的核心数据模型。
+"""
+
+#表示纯文本内容块。
 class TextBlock(BaseModel):
     """Plain text content."""
 
     type: Literal["text"] = "text"
     text: str
 
-
+"""表示图片内容块，支持本地图片转 base64，供多模态模型使用。"""
 class ImageBlock(BaseModel):
     """Image content encoded inline for multimodal providers."""
 
@@ -36,7 +42,7 @@ class ImageBlock(BaseModel):
         payload = base64.b64encode(resolved.read_bytes()).decode("ascii")
         return cls(media_type=media_type, data=payload, source_path=str(resolved))
 
-
+"""表示AI 请求调用工具的指令，包含工具名、参数、ID。"""
 class ToolUseBlock(BaseModel):
     """A request from the model to execute a named tool."""
 
@@ -45,7 +51,7 @@ class ToolUseBlock(BaseModel):
     name: str
     input: dict[str, Any] = Field(default_factory=dict)
 
-
+"""表示工具执行结果，返回给 AI。"""
 class ToolResultBlock(BaseModel):
     """Tool result content sent back to the model."""
 
@@ -61,7 +67,7 @@ ContentBlock = Annotated[
     Field(discriminator="type"),
 ]
 
-
+"""表示一条完整对话消息（用户 / 助手），可包含文本、图片、工具调用。"""
 class ConversationMessage(BaseModel):
     """A single assistant or user message."""
 
@@ -115,7 +121,7 @@ class ConversationMessage(BaseModel):
                     return False
         return True
 
-
+"""清理修复对话历史，删除无效消息、残缺工具调用，保证 API 可用。"""
 def sanitize_conversation_messages(messages: list[ConversationMessage]) -> list[ConversationMessage]:
     """Normalize restored conversation history into a provider-safe sequence.
 
@@ -170,7 +176,7 @@ def sanitize_conversation_messages(messages: list[ConversationMessage]) -> list[
 
     return sanitized
 
-
+"""把内容块转成 API 接口格式，用于发送给模型。"""
 def serialize_content_block(block: ContentBlock) -> dict[str, Any]:
     """Convert a local content block into the provider wire format."""
     if isinstance(block, TextBlock):
@@ -201,7 +207,7 @@ def serialize_content_block(block: ContentBlock) -> dict[str, Any]:
         "is_error": block.is_error,
     }
 
-
+"""把 API 返回的消息转为内部格式。"""
 def assistant_message_from_api(raw_message: Any) -> ConversationMessage:
     """Convert an Anthropic SDK message object into a conversation message."""
     content: list[ContentBlock] = []

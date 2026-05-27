@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+"""LLM 模型提供商注册中心，统一管理 OpenAI、Claude、阿里云等所有 AI 服务商配置信息，
+通过模型名、API 密钥、接口地址自动识别服务商，是系统对接不同 AI 模型的核心配置中心。    """
 
 @dataclass(frozen=True)
 class ProviderSpec:

@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 # These protect high-value credential and key material from LLM-directed access
 # (including via prompt injection).  Patterns use fnmatch syntax and are matched
 # against the fully-resolved absolute path produced by the query engine.
+"""最高优先级保护清单，永久禁止访问系统密钥、云凭证等敏感路径。"""
 SENSITIVE_PATH_PATTERNS: tuple[str, ...] = (
     # SSH keys and config
     "*/.ssh/*",
@@ -36,7 +37,15 @@ SENSITIVE_PATH_PATTERNS: tuple[str, ...] = (
     "*/.openharness/copilot_auth.json",
 )
 
+"""LLM 工具调用的安全权限系统。永久禁止访问密钥等敏感路径；通过工具黑白名单、路径规则、命令黑名单控制执行；
+根据权限模式决定是否允许或需用户确认。
+PermissionChecker 是核心类，evaluate () 是核心判断方法，所有安全校验都由此完成，防止越权操作、提示注入风险，保障系统安全。
 
+PermissionChecker.evaluate()：核心函数，所有权限判断都在这里执行
+SENSITIVE_PATH_PATTERNS：最高优先级保护，强制禁止访问凭证
+代码按敏感路径→工具黑名单→白名单→路径规则→权限模式顺序判断"""
+
+"""权限检查结果类，记录是否允许、是否需要确认、拒绝原因。"""
 @dataclass(frozen=True)
 class PermissionDecision:
     """Result of checking whether a tool invocation may run."""
@@ -45,7 +54,7 @@ class PermissionDecision:
     requires_confirmation: bool = False
     reason: str = ""
 
-
+"""路径权限规则，存储路径匹配表达式 + 允许 / 拒绝。"""
 @dataclass(frozen=True)
 class PathRule:
     """A glob-based path permission rule."""
@@ -53,10 +62,10 @@ class PathRule:
     pattern: str
     allow: bool  # True = allow, False = deny
 
-
+"""核心权限检查器，初始化加载配置，evaluate是最重要方法，完成所有权限判断。"""
 class PermissionChecker:
     """Evaluate tool usage against the configured permission mode and rules."""
-
+    """加载配置，解析路径权限规则"""
     def __init__(self, settings: PermissionSettings) -> None:
         self._settings = settings
         # Parse path rules from settings
@@ -71,7 +80,9 @@ class PermissionChecker:
                     "Skipping path rule with missing, empty, or non-string 'pattern' field: %r",
                     rule,
                 )
-
+    """!!!evaluate()（总入口，所有权限判断都在这里）
+     tool_name：工具名    is_read_only：是否只读操作     file_path：操作的文件路径
+     command：执行的命令   逻辑：按敏感路径→工具黑名单→白名单→路径规则→命令黑名单→权限模式依次判断，返回结果。"""
     def evaluate(
         self,
         tool_name: str,
@@ -155,7 +166,7 @@ class PermissionChecker:
             reason=reason,
         )
 
-
+"""处理文件路径格式，让权限匹配更准确。"""
 def _policy_match_paths(file_path: str) -> tuple[str, ...]:
     """Return path forms that should participate in policy matching.
 
@@ -168,7 +179,7 @@ def _policy_match_paths(file_path: str) -> tuple[str, ...]:
         return (file_path,)
     return (normalized, normalized + "/")
 
-
+"""对 npm/pip 安装等命令生成安全提示。"""
 def _bash_permission_hint(command: str | None) -> str:
     if not command:
         return ""

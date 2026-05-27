@@ -13,17 +13,33 @@ from xml.sax.saxutils import escape, unescape
 # TeamRegistry (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
+""" AI 协作协调器核心模块，实现团队管理、任务通知、XML 序列化、协调模式控制四大功能。
+   用于管理 AI 代理团队，存储任务结果，将任务通知转为标准 XML 格式，通过环境变量判断是否启用协调模式，
+   定义协调器专属工具和系统指令，让主 AI 分配任务给子工作代理，实现多代理并行协作完成编程任务。
+   
+   
+   必须掌握的重点（核心）
+TaskNotification：任务结果的标准数据结构
+format/parse_task_notification：任务结果的 XML 序列化与解析，是代理通信的桥梁
+is_coordinator_mode：协调模式的总开关
+get_coordinator_system_prompt：协调器的核心工作规则，控制所有代理协作逻辑
+总结
+代码核心是多 AI 代理协作协调器，负责团队管理、任务通信、模式控制
+四个重点函数 / 类是代理协作的核心，负责任务结果传递、模式判断、工作规则
+协调模式下，主 AI 作为协调者分配任务，子代理执行具体工作，通过 XML 格式传递结果
+"""
 
+# 数据类，定义内存中的团队信息，包含团队名、描述、代理列表、消息列表。
 @dataclass
 class TeamRecord:
     """A lightweight in-memory team."""
-
     name: str
     description: str = ""
     agents: list[str] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
 
-
+#TeamRegistry：团队注册表，管理所有团队的增删改查，提供创建 / 删除团队、添加代理、发送消息、列出团队的方法，
+# _require_team是内部校验方法，确保团队存在。
 class TeamRegistry:
     """Store teams and agent memberships."""
 
@@ -62,7 +78,7 @@ class TeamRegistry:
 
 _DEFAULT_TEAM_REGISTRY: TeamRegistry | None = None
 
-
+#get_team_registry：单例函数，全局唯一的团队注册表，保证整个程序只有一个团队管理实例。
 def get_team_registry() -> TeamRegistry:
     """Return the singleton team registry."""
     global _DEFAULT_TEAM_REGISTRY
@@ -75,7 +91,7 @@ def get_team_registry() -> TeamRegistry:
 # Data classes
 # ---------------------------------------------------------------------------
 
-
+"""!!任务通知数据类，存储子代理完成任务的所有结果：任务 ID、状态、摘要、结果、资源使用。"""
 @dataclass
 class TaskNotification:
     """Structured result from a completed agent task."""
@@ -86,7 +102,7 @@ class TaskNotification:
     result: Optional[str] = None
     usage: Optional[dict[str, int]] = None
 
-
+"""工作代理配置类，定义创建子代理所需的 ID、名称、提示词、模型等参数。"""
 @dataclass
 class WorkerConfig:
     """Configuration for a spawned worker agent."""
@@ -105,7 +121,7 @@ class WorkerConfig:
 
 _USAGE_FIELDS = ("total_tokens", "tool_uses", "duration_ms")
 
-
+"""!!将任务通知对象转为标准 XML 字符串，用于系统传递任务结果。"""
 def format_task_notification(n: TaskNotification) -> str:
     """Serialize a TaskNotification to the canonical XML envelope."""
     parts = [
@@ -125,7 +141,7 @@ def format_task_notification(n: TaskNotification) -> str:
     parts.append("</task-notification>")
     return "\n".join(parts)
 
-
+"""!!解析 XML 格式的任务通知，还原为 TaskNotification 对象，是协调器接收子代理结果的关键。"""
 def parse_task_notification(xml: str) -> TaskNotification:
     """Parse a <task-notification> XML string into a TaskNotification."""
 
@@ -182,13 +198,13 @@ _WORKER_TOOLS = [
 
 _SIMPLE_WORKER_TOOLS = ["bash", "file_read", "file_edit"]
 
-
+"""!!1、协调器模式开关（决定能不能创建子代理）     只有开启这个，才能创建子代理"""
 def is_coordinator_mode() -> bool:
     """Return True when the process is running in coordinator mode."""
     val = os.environ.get("CLAUDE_CODE_COORDINATOR_MODE", "")
     return val.lower() in {"1", "true", "yes"}
 
-
+"""同步会话模式，根据历史会话自动切换协调模式开关。"""
 def match_session_mode(session_mode: Optional[str]) -> Optional[str]:
     """Align the env-var coordinator flag with a resumed session's stored mode.
 
@@ -212,12 +228,26 @@ def match_session_mode(session_mode: Optional[str]) -> Optional[str]:
         return "Entered coordinator mode to match resumed session."
     return "Exited coordinator mode to match resumed session."
 
-
+"""返回协调器专属工具：创建代理、发送消息、停止任务。"""
 def get_coordinator_tools() -> list[str]:
     """Return the tool names reserved for the coordinator."""
     return [_AGENT_TOOL_NAME, _SEND_MESSAGE_TOOL_NAME, _TASK_STOP_TOOL_NAME]
 
+"""构建协调器用户上下文：告诉协调器，子代理有哪些权限和可用资源，
+只有在协调模式开启时才会生成内容；
+告诉主 AI（协调器）：我创建的子代理能使用哪些工具、能访问哪些 MCP 服务、能读写哪个临时目录
+最终返回的字典会被上一个函数包装成消息，发送给 AI
 
+输入参数：  mcp_clients：MCP 客户端列表（MCP = 模型上下文协议，用于扩展 AI 工具）
+scratchpad_dir临时工作目录路径（子代理可自由读写的文件夹）
+ 
+ 结果包装成dict[str, str]字典格式返回：
+ {
+    "workerToolsContext": "一段完整的权限说明文本"
+}
+
+如果开启协调模式，返回包含工具权限、MCP 服务、临时目录的上下文字典
+ """
 def get_coordinator_user_context(
     mcp_clients: list[dict[str, str]] | None = None,
     scratchpad_dir: Optional[str] = None,
@@ -226,19 +256,26 @@ def get_coordinator_user_context(
     if not is_coordinator_mode():
         return {}
 
+    """从环境变量读取 CLAUDE_CODE_SIMPLE，判断是否为简易模式（简化工具集）
+    简易模式 → 使用简化工具列表 _SIMPLE_WORKER_TOOLS ；普通模式 → 使用完整工具列表 _WORKER_TOOLS  
+    把工具列表拼接成逗号分隔的字符串，方便 AI 阅读"""
     is_simple = os.environ.get("CLAUDE_CODE_SIMPLE", "").lower() in {"1", "true", "yes"}
     tools = sorted(_SIMPLE_WORKER_TOOLS if is_simple else _WORKER_TOOLS)
     worker_tools_str = ", ".join(tools)
 
+    """通过 agent 工具创建的子代理可以使用以下工具：xxx、xxx、xxx"""
     content = (
         f"Workers spawned via the {_AGENT_TOOL_NAME} tool have access to these tools: "
         f"{worker_tools_str}"
     )
-
+    """如果传入了 MCP 客户端列表,提取所有服务名称
+     追加内容：子代理还可以使用这些 MCP 服务提供的工具"""
     if mcp_clients:
         server_names = ", ".join(c["name"] for c in mcp_clients)
         content += f"\n\nWorkers also have access to MCP tools from connected MCP servers: {server_names}"
 
+    """如果传入了临时目录,追加目录信息
+      说明：子代理可自由读写该目录，用于跨代理共享数据"""
     if scratchpad_dir:
         content += (
             f"\n\nScratchpad directory: {scratchpad_dir}\n"
@@ -246,13 +283,76 @@ def get_coordinator_user_context(
             "Use this for durable cross-worker knowledge — structure files however fits the work."
         )
 
+    """workerToolsContext是拼接好的完整权限说明文本"""
     return {"workerToolsContext": content}
 
+"""核心重点：  2、协调器系统提示词（告诉主 AI：你可以创建 worker），主 AI 就是靠这段提示词学会创建子代理的。
 
+!!协调模式的核心指令，生成并返回一段超长、完整、结构化的系统提示词（System Prompt）。
+这段提示词会注入给主 AI（协调器），告诉主 AI：你是谁、你有什么工具、如何管理子代理、如何分配任务、如何接收结果、如何写指令、如何处理异常。
+
+这段超长提示词告诉主 AI：
+你是协调者
+你有三个工具：agent / send_message / task_stop
+子代理叫 worker
+任务分四阶段：研究 → 合成 → 实现 → 验证
+必须并行执行
+必须写精确指令
+
+提示词内部结构逐段解释（共 6 大模块）
+1. Your Role（你的角色）
+你是协调者（coordinator）
+负责：帮助用户、分配任务、汇总结果、直接回答简单问题
+规则：所有消息都对用户说，子 AI 结果是内部信号，不要回应它们
+2. Your Tools（你的工具）
+告诉协调器它能调用哪些工具：
+agent：创建新子 AI
+send_message：给已存在的子 AI 发消息
+task_stop：停止运行中的子 AI
+订阅 GitHub PR 事件
+同时明确规则：
+不要让子 AI 互相检查
+不要用子 AI 做琐碎任务
+不要预测子 AI 结果，等待真实返回
+子 AI 返回结果是 XML 格式的 task-notification
+3. Workers（子代理规则）
+创建子 AI 必须指定 subagent_type: worker
+子 AI 自动执行：研究、编码、验证
+插入前面生成的 worker_capabilities 工具能力说明
+4. Task Workflow（任务工作流）
+定义标准任务四阶段：
+Research：子 AI 并行查代码、找问题
+Synthesis：** 你（协调器）** 分析结果、写明确指令
+Implementation：子 AI 按要求改代码
+Verification：子 AI 测试验证
+并说明：
+并行是超能力
+只读任务可并行
+写任务需串行
+子 AI 失败如何处理
+如何停止错误任务
+5. Writing Worker Prompts（如何给子 AI 写指令）
+全文最重要的章节：
+子 AI 看不见主对话
+指令必须自包含、完整、精确
+必须合成信息，不能模糊甩锅
+必须带：文件路径、行号、修改内容、预期结果
+教你：什么时候继续旧子 AI，什么时候创建新子 AI
+6. Example Session（完整案例）
+给一个真实案例：
+用户说：认证模块有空指针
+协调器启动两个子 AI 并行排查
+子 AI 返回 XML 结果
+协调器分析后下发修复指令
+全程演示完整协作流程
+
+"""
 def get_coordinator_system_prompt() -> str:
     """Return the system prompt injected when running in coordinator mode."""
     is_simple = os.environ.get("CLAUDE_CODE_SIMPLE", "").lower() in {"1", "true", "yes"}
-
+    """读取环境变量判断是否简易模式
+    简易模式：子 AI 只有基础工具 Bash、读、改文件
+    普通模式：子 AI 有完整工具 + 技能调用     完整工具 + 项目技能（commit/verify 等）"""
     if is_simple:
         worker_capabilities = (
             "Workers have access to Bash, Read, and Edit tools, "

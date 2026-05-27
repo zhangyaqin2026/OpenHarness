@@ -54,11 +54,18 @@ Carefully consider the reversibility and blast radius of actions. Freely take lo
  - Focus text output on: decisions needing user input, status updates at milestones, errors that change the plan.
  - If you can say it in one sentence, don't use three."""
 
-
 def get_base_system_prompt() -> str:
     """Return the built-in base system prompt without environment info."""
     return _BASE_SYSTEM_PROMPT
 
+"""构建 OpenHarness 的系统提示词，内置固定的 AI 助手行为规则，自动附加操作系统、目录、Git、Python 等环境信息，
+最终生成完整的 system prompt 发送给大模型，是 AI 行为的核心指令。
+
+_BASE_SYSTEM_PROMPT：AI 的核心行为规则（安全、工具、风格、任务）
+build_system_prompt()：生成最终提示词，决定 AI 怎么工作
+自动附加环境信息，让 AI 知道当前运行环境
+该模块是AI 理解任务、遵守规则的基础
+"""
 
 def _format_environment_section(env: EnvironmentInfo) -> str:
     """Format the environment info section of the system prompt."""

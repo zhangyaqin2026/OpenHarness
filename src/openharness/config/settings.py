@@ -28,6 +28,15 @@ from openharness.utils.fs import atomic_write_text
 # ANSI escape sequence pattern
 _ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 
+"""OpenHarness 的核心配置管理模块，定义所有系统配置结构（AI 模型、权限、沙箱、认证、通道等），
+按优先级加载配置，提供配置解析、合并、持久化、认证解析功能，是系统运行的配置中心。    
+
+Settings：整个系统最核心配置类，所有功能的参数来源
+ProviderProfile：AI 模型服务商配置，决定用哪个大模型
+resolve_model_setting()：模型名称解析，统一别名与真实名称
+load_settings()：系统启动时唯一加载配置入口
+配置优先级：CLI 参数 > 环境变量 > 配置文件 > 默认值
+作用：统一管理、解析、加载、保存所有系统配置"""
 
 def strip_ansi_escape_sequences(text: str) -> str:
     """Remove ANSI escape sequences from text.
@@ -108,7 +117,7 @@ class SandboxSettings(BaseModel):
     filesystem: SandboxFilesystemSettings = Field(default_factory=SandboxFilesystemSettings)
     docker: DockerSandboxSettings = Field(default_factory=DockerSandboxSettings)
 
-
+"""AI 服务商配置文件: 存储模型、接口、认证、地址等完整 AI 服务信息 """
 class ProviderProfile(BaseModel):
     """Named provider workflow configuration."""
 
@@ -299,7 +308,7 @@ def display_model_setting(profile: ProviderProfile) -> str:
         return "default"
     return configured or profile.default_model
 
-
+"""模型名称解析:将别名（sonnet/best）转为真实模型 ID """
 def resolve_model_setting(
     model_setting: str,
     provider: str,
@@ -526,7 +535,7 @@ class VisionModelConfig(BaseModel):
         """Return True when both model and api_key are set."""
         return bool(self.model and self.api_key)
 
-
+"""全局总配置类: 整合所有配置：AI 模型、权限、沙箱、记忆、通道、插件"""
 class Settings(BaseModel):
     """Main settings model for OpenHarness."""
 
@@ -962,7 +971,7 @@ def _parse_bool_env(value: str) -> bool:
     """Parse a boolean environment override."""
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
-
+"""!!配置加载入口从文件 / 环境变量 / 默认值加载并合并配置"""
 def load_settings(config_path: Path | None = None) -> Settings:
     """Load settings from config file, merging with defaults.
 

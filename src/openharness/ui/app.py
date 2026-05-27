@@ -85,7 +85,17 @@ async def run_repl(
     if exit_code != 0:
         raise SystemExit(exit_code)
 
+"""无交互界面无 UI 后台任务工作器，通过标准输入接收指令，专门处理 AI 代理后台任务。它接收配置参数，
+定义权限、输出、事件渲染等内部函数，构建并启动运行环境，读取并执行单次任务，自动输出结果，执行完毕后关闭资源。
+全程无终端界面，用于子进程、自动化任务。
 
+创建并启动 AI 运行环境
+从标准输入读取一条任务
+执行任务并输出结果
+执行完立刻退出
+最后关闭环境，不占资源
+它是后台一次性任务 worker，没有界面、不用交互、执行完就退出，专门给程序自动调用 AI 干活用的。
+"""
 async def run_task_worker(
     *,
     cwd: str | None = None,
@@ -104,16 +114,16 @@ async def run_task_worker(
     agent processes. It intentionally avoids the React TUI / Ink path so it
     can run without a controlling TTY.
     """
-
+    """空权限函数，直接放行所有工具调用。"""
     async def _noop_permission(_tool_name: str, _reason: str) -> bool:
         return True
-
+    """空提问函数，无需用户交互。"""
     async def _noop_ask(_question: str) -> str:
         return ""
-
+    """打印系统消息并立即刷新输出。"""
     async def _print_system(message: str) -> None:
         print(message, flush=True)
-
+    """判断事件类型，分别输出 AI 回复、换行、错误、状态信息。"""
     async def _render_event(event: StreamEvent) -> None:
         from openharness.engine.stream_events import AssistantTextDelta, AssistantTurnComplete, ErrorEvent, StatusEvent
 
@@ -127,10 +137,10 @@ async def run_task_worker(
             print(event.message, flush=True)
         elif isinstance(event, StatusEvent) and event.message:
             print(event.message, flush=True)
-
+    """空清空函数，不做任何操作。"""
     async def _clear_output() -> None:
         return None
-
+    """创建一个 AI 运行环境包:把工作目录、模型、API 密钥、权限设置等所有配置打包成一个可运行的环境。 """
     bundle = await build_runtime(
         cwd=cwd,
         model=model,
@@ -145,6 +155,7 @@ async def run_task_worker(
         enforce_max_turns=max_turns is not None,
         permission_mode=permission_mode,
     )
+    """ 启动这个 AI 运行环境:让打包好的环境准备就绪，可以接收指令干活。"""
     await start_runtime(bundle)
     try:
         while True:

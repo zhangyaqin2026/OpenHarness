@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+""" 查找并加载项目里的 CLAUDE.md 配置文件，把项目自定义规则、指令读取后拼接成提示词，让 AI 遵守项目专属要求，是 AI 适配项目规则的核心模块。
+
+load_claude_md_prompt：最核心，生成项目规则提示词
+discover_claude_md_files：负责找到配置文件
+功能：让 AI遵守项目里的自定义指令   """
 
 def discover_claude_md_files(cwd: str | Path) -> list[Path]:
     """Discover relevant CLAUDE.md instruction files from the cwd upward."""
@@ -32,7 +37,7 @@ def discover_claude_md_files(cwd: str | Path) -> list[Path]:
 
     return results
 
-
+"""!!!读取找到的文件内容，拼接成一段完整的 AI 提示词，供 AI 使用。"""
 def load_claude_md_prompt(cwd: str | Path, *, max_chars_per_file: int = 12000) -> str | None:
     """Load discovered instruction files into one prompt section."""
     files = discover_claude_md_files(cwd)

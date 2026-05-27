@@ -112,24 +112,41 @@ class CompactionResult:
 # ---------------------------------------------------------------------------
 # Token estimation
 # ---------------------------------------------------------------------------
-
+"""OpenHarness的对话token估算函数，用于统计消息列表的总token数。
+先初始化计数器，获取单张图片的预估token，遍历所有消息和内容块，分别计算文本、工具结果、工具调用、图片的token并累加，
+最后乘以4/3的安全冗余系数，返回整数结果。核心作用是精准估算对话占用token，为上下文压缩提供判断依据。 """
 def estimate_message_tokens(messages: list[ConversationMessage]) -> int:
+# 定义一个名为estimate_message_tokens的函数，参数是对话消息列表，返回值为整数（token总数）
     """Estimate total tokens for a conversation, including the 4/3 padding."""
+    # 函数文档：估算对话的总token数，包含4/3的安全冗余系数
     total = 0
+    # 初始化总token计数器，初始值为0
     image_token_estimate = _vision_token_budget_per_image()
+    # 调用函数，获取单张图片消耗的预估token数，赋值给变量
     for msg in messages:
+    # 遍历传入的每一条对话消息
         for block in msg.content:
+        # 遍历单条消息中的每一个内容块（文本、图片、工具等）
             if isinstance(block, TextBlock):
+            # 判断当前内容块是否为纯文本块
                 total += estimate_tokens(block.text)
+                # 计算文本的token数，累加到总token数
             elif isinstance(block, ToolResultBlock):
+            # 判断当前内容块是否为工具执行结果块
                 total += estimate_tokens(block.content)
+                # 计算工具结果内容的token数，累加到总token数
             elif isinstance(block, ToolUseBlock):
+            # 判断当前内容块是否为工具调用块
                 total += estimate_tokens(block.name)
+                # 计算工具名称的token数，累加到总token数
                 total += estimate_tokens(str(block.input))
+                # 计算工具输入参数的token数，累加到总token数
             elif isinstance(block, ImageBlock):
+            # 判断当前内容块是否为图片块
                 total += image_token_estimate
+                # 把图片的预估token数，累加到总token数
     return int(total * TOKEN_ESTIMATION_PADDING)
-
+# 总token数乘以安全冗余系数，转换为整数后返回
 
 def estimate_conversation_tokens(messages: list[ConversationMessage]) -> int:
     """Alias kept for backward compatibility."""
@@ -183,33 +200,38 @@ def _sanitize_metadata(value: Any) -> Any:
         return [_sanitize_metadata(item) for item in value]
     return str(value)
 
-
+"""记录精简版检查点数据：接收元数据、检查点标识、触发条件、消息 / 令牌数量等信息，组装成标准数据格式；
+可选添加重试次数、详情数据，还能把新数据追加到历史元数据中并更新最新记录，最后返回组装好的检查点数据。 """
 def _record_compact_checkpoint(
-    carryover_metadata: dict[str, Any] | None,
+    carryover_metadata: dict[str, Any] | None, #可选的历史元数据字典
     *,
-    checkpoint: str,
-    trigger: CompactTrigger,
-    message_count: int,
+    checkpoint: str, #必填的检查点标识字符串
+    trigger: CompactTrigger,#必填的检查点触发条件
+    message_count: int,#必填的消息数量、令牌数量
     token_count: int,
-    attempt: int | None = None,
+    attempt: int | None = None,#可选的重试次数、详情字典
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """创建基础数据字典，存入核心检查点信息"""
     payload: dict[str, Any] = {
         "checkpoint": checkpoint,
         "trigger": trigger,
         "message_count": message_count,
         "token_count": token_count,
     }
+    """如果有重试次数，添加到数据中"""
     if attempt is not None:
         payload["attempt"] = attempt
+        """如果有详情数据，清洗后合并到数据中"""
     if details:
         payload.update(_sanitize_metadata(details))
+        """如果有历史元数据,   checkpoints获取 / 创建历史检查点列表"""
     if carryover_metadata is not None:
         checkpoints = carryover_metadata.setdefault("compact_checkpoints", [])
         if isinstance(checkpoints, list):
-            checkpoints.append(payload)
-        carryover_metadata["compact_last"] = payload
-    return payload
+            checkpoints.append(payload)#把新数据追加到历史列表
+        carryover_metadata["compact_last"] = payload #更新最新检查点记录
+    return payload #返回最终组装好的检查点数据
 
 
 async def _emit_progress(
@@ -454,11 +476,16 @@ def create_compact_boundary_message(metadata: dict[str, Any]) -> ConversationMes
         lines.append(f"Preserved segment anchor: {anchor}")
     return ConversationMessage.from_user_text("\n".join(lines))
 
-
+"""按固定顺序组装压缩后的对话消息，整合边界标记、摘要、保留消息、附件与钩子消息，返回最终可用列表。"""
+# 定义函数，传入压缩结果对象，返回整理后的消息列表
 def build_post_compact_messages(result: CompactionResult) -> list[ConversationMessage]:
+    # 函数说明：按指定顺序重建压缩后的消息列表
     """Rebuild the post-compact message list in Claude Code's ordering."""
+    # 处理结果中的附件，生成附件消息
     attachment_messages = [render_compact_attachment(attachment) for attachment in result.attachments]
+    # 处理结果中的钩子结果，生成对应的消息
     hook_messages = [render_compact_attachment(attachment) for attachment in result.hook_results]
+    # 按固定顺序拼接所有消息并返回
     return [
         result.boundary_marker,
         *result.summary_messages,
@@ -466,7 +493,6 @@ def build_post_compact_messages(result: CompactionResult) -> list[ConversationMe
         *attachment_messages,
         *hook_messages,
     ]
-
 
 def _boundary_crosses_tool_pair(previous: ConversationMessage, current: ConversationMessage) -> bool:
     """Return True when a preserve boundary would split a tool_use/result pair."""
@@ -889,7 +915,9 @@ def _build_session_memory_message(messages: list[ConversationMessage]) -> Conver
         "Session memory summary from earlier in this conversation:\n" + body
     )
 
-
+"""轻量级对话压缩工具，在调用 AI 压缩前使用。先判断消息数量是否满足压缩条件，不满足则直接退出；
+将消息分为历史和最新两部分，把历史转为精简记忆摘要。
+若压缩后 token 和消息数未减少则退出，否则记录压缩信息，生成压缩结果，返回压缩后数据，高效降低对话长度。"""
 def try_session_memory_compaction(
     messages: list[ConversationMessage],
     *,
@@ -897,19 +925,27 @@ def try_session_memory_compaction(
     trigger: CompactTrigger = "auto",
     metadata: dict[str, Any] | None = None,
 ) -> CompactionResult | None:
+# 定义轻量级对话压缩函数，输入消息列表、保留最新消息数、触发类型、元数据，返回压缩结果/空
     """Cheap deterministic compaction for long chats before full LLM compaction."""
+# 函数注释：完整AI压缩前，对长对话做轻量确定性压缩
     if len(messages) <= preserve_recent + 4:
         return None
+# 消息总数过少，无需压缩，直接返回空
     older, newer = _split_preserving_tool_pairs(messages, preserve_recent=preserve_recent)
+# 将消息拆分为历史消息older和需要保留的最新消息newer
     summary_message = _build_session_memory_message(older)
+# 把历史消息打包成精简的会话记忆摘要
     if summary_message is None:
         return None
+# 摘要生成失败，不压缩，返回空
     provisional = [summary_message, *newer]
+# 拼接摘要+最新消息，生成临时压缩后的消息列表
     if (
         estimate_message_tokens(provisional) >= estimate_message_tokens(messages)
         and len(provisional) >= len(messages)
     ):
         return None
+# 压缩后token/数量未变少，压缩无效，返回空
     compact_metadata = {
         "trigger": trigger,
         "compact_kind": "session_memory",
@@ -920,6 +956,7 @@ def try_session_memory_compaction(
         "pre_compact_discovered_tools": _extract_discovered_tools(older),
         "attachments": _extract_attachment_paths(older),
     }
+# 记录压缩相关的元数据
     result = CompactionResult(
         trigger=trigger,
         compact_kind="session_memory",
@@ -930,9 +967,9 @@ def try_session_memory_compaction(
         hook_results=[],
         compact_metadata=compact_metadata,
     )
+# 构建标准的压缩结果对象
     return _finalize_compaction_result(result)
-
-
+# 处理并返回最终的有效压缩结果
 # ---------------------------------------------------------------------------
 # Full compact — LLM-based summarization
 # ---------------------------------------------------------------------------
@@ -992,23 +1029,29 @@ def format_compact_summary(raw_summary: str) -> str:
     text = re.sub(r"\n\n+", "\n\n", text)
     return text.strip()
 
-
+"""生成对话压缩后的提示文案。格式化历史摘要，拼接上下文超限说明语句，依据配置追加消息保留标识与禁止追问指令，
+产出完整文本，用以替换压缩历史，保障对话无缝接续。"""
 def build_compact_summary_message(
     summary: str,
     *,
     suppress_follow_up: bool = False,
     recent_preserved: bool = False,
 ) -> str:
+# 定义函数，参数：压缩摘要、是否禁止追问、是否保留最近消息，返回拼接后的提示文本
     """Create the injected user message that replaces compacted history."""
+    # 函数说明：生成替换压缩后历史的用户消息
     formatted = format_compact_summary(summary)
+    # 格式化压缩摘要内容
     text = (
         "This session is being continued from a previous conversation that ran "
         "out of context. The summary below covers the earlier portion of the "
         "conversation.\n\n"
         f"{formatted}"
     )
+    # 拼接基础提示文本，说明上下文超限，用摘要替代历史对话
     if recent_preserved:
         text += "\n\nRecent messages are preserved verbatim."
+    # 如果保留最近消息，追加说明文字
     if suppress_follow_up:
         text += (
             "\nContinue the conversation from where it left off without asking "
@@ -1017,8 +1060,9 @@ def build_compact_summary_message(
             '"I\'ll continue" or similar. Pick up the last task as if the break '
             "never happened."
         )
+    # 如果禁止追问，追加指令：直接继续对话，不回应摘要、不提问、不重复说明
     return text
-
+# 返回最终拼接完成的完整文本
 
 # ---------------------------------------------------------------------------
 # Auto-compact tracking
@@ -1091,44 +1135,34 @@ def should_autocompact(
 # ---------------------------------------------------------------------------
 # Full compact execution (calls the LLM)
 # ---------------------------------------------------------------------------
-
+# 定义异步函数：调用大模型总结，实现对话完整压缩
 async def compact_conversation(
-    messages: list[ConversationMessage],
-    *,
-    api_client: Any,
-    model: str,
-    system_prompt: str = "",
-    preserve_recent: int = 6,
-    custom_instructions: str | None = None,
-    suppress_follow_up: bool = True,
-    trigger: CompactTrigger = "manual",
-    progress_callback: CompactProgressCallback | None = None,
-    emit_hooks_start: bool = True,
-    hook_executor: HookExecutor | None = None,
-    carryover_metadata: dict[str, Any] | None = None,
-) -> CompactionResult:
-    """Compact messages by calling the LLM to produce a summary.
-
-    1. Microcompact first (cheap token reduction).
-    2. Split into older (to summarize) and recent (to preserve).
-    3. Call the LLM with the compact prompt to get a structured summary.
-    4. Replace older messages with the summary + preserved recent messages.
-
-    Args:
-        messages: The full conversation history.
-        api_client: An ``AnthropicApiClient`` or compatible for the summary call.
-        model: Model ID to use for the summary.
-        system_prompt: System prompt for the summary call.
-        preserve_recent: Number of recent messages to keep verbatim.
-        custom_instructions: Optional extra instructions for the summary prompt.
-        suppress_follow_up: If True, instruct the model not to ask follow-ups.
-
-    Returns:
-        Structured compaction result that can be rebuilt into post-compact messages.
+    messages: list[ConversationMessage],  # 输入：待压缩的对话消息列表
+    *,                                      # 关键字参数分隔符，后面必须用key=value传参
+    api_client: Any,                        # 输入：调用AI接口的客户端对象
+    model: str,                             # 输入：使用的AI大模型名称
+    system_prompt: str = "",                # 输入：给AI的系统提示词，默认空
+    preserve_recent: int = 6,                # 输入：保留最近N条消息不压缩，默认6条
+    custom_instructions: str | None = None,  # 输入：自定义压缩指令，可选
+    suppress_follow_up: bool = True,        # 输入：是否禁止AI追问，默认开启
+    trigger: CompactTrigger = "manual",     # 输入：压缩触发方式，默认手动触发
+    progress_callback: CompactProgressCallback | None = None,  # 输入：进度回调函数
+    emit_hooks_start: bool = True,          # 输入：是否触发开始钩子，默认开启
+    hook_executor: HookExecutor | None = None,  # 输入：钩子执行器对象
+    carryover_metadata: dict[str, Any] | None = None,  # 输入：传递的追踪元数据
+) -> CompactionResult:                      # 输出：返回压缩结果对象
+    """文档注释：调用 LLM 总结实现消息压缩
+    1. 先微压缩（低成本减少令牌）
+    2. 拆分消息：旧消息（总结）+ 新消息（保留）
+    3. 调用 LLM 生成结构化总结
+    4. 用总结替换旧消息 + 保留新消息
     """
+    # 导入AI接口请求相关的依赖类
     from openharness.api.client import ApiMessageRequest, ApiMessageCompleteEvent
 
+    # 判断：如果对话消息总数 ≤ 需要保留的数量
     if len(messages) <= preserve_recent:
+        # 直接返回不压缩的结果，无需处理
         return _build_passthrough_compaction_result(
             messages,
             trigger=trigger,
@@ -1136,20 +1170,28 @@ async def compact_conversation(
             metadata={"reason": "conversation already within preserve_recent window"},
         )
 
-    # Step 1: microcompact to reduce tokens cheaply
+    # 第一步：执行轻量微压缩，降低token消耗，返回压缩后消息和节省的token数
     messages, tokens_freed = microcompact_messages(messages, keep_recent=DEFAULT_KEEP_RECENT)
 
+    """计算压缩前的消息的总token数
+    estimate_message_tokens是OpenHarness的对话token估算函数，用于统计消息列表的总token数。
+先初始化计数器，获取单张图片的预估token，遍历所有消息和内容块，分别计算文本、工具结果、工具调用、图片的token并累加，
+最后乘以4/3的安全冗余系数，返回整数结果。核心作用是精准估算对话占用token，为上下文压缩提供判断依据。 """
     pre_compact_tokens = estimate_message_tokens(messages)
+    # 打印日志：记录当前压缩的消息数量和token数
     log.info("Compacting conversation: %d messages, ~%d tokens", len(messages), pre_compact_tokens)
 
-    # Step 2: split into older (summarize) and newer (preserve)
+    # 第二步：拆分消息，older=需要总结的旧消息，newer=直接保留的新消息
     older, newer = _split_preserving_tool_pairs(messages, preserve_recent=preserve_recent)
 
-    # Step 3: build compact request — send older messages + compact prompt
-    compact_prompt = get_compact_prompt(custom_instructions)
+    # 第三步：构建AI压缩请求
+    compact_prompt = get_compact_prompt(custom_instructions)  # 获取总结用的提示词
+    # 组装待总结消息 = 旧消息 + 压缩提示词
     compact_messages = list(older) + [ConversationMessage.from_user_text(compact_prompt)]
-    attachment_paths = _extract_attachment_paths(older)
-    discovered_tools = _extract_discovered_tools(older)
+    attachment_paths = _extract_attachment_paths(older)  # 从旧消息中提取附件路径
+    discovered_tools = _extract_discovered_tools(older)  # 从旧消息中提取工具信息
+
+    # 构建前置钩子需要传递的参数数据
     hook_payload = {
         "event": HookEvent.PRE_COMPACT.value,
         "trigger": trigger,
@@ -1161,6 +1203,8 @@ async def compact_conversation(
         "discovered_tools": discovered_tools,
         **(carryover_metadata or {}),
     }
+
+    # 记录压缩准备阶段的检查点数据
     start_checkpoint = _record_compact_checkpoint(
         carryover_metadata,
         checkpoint="compact_prepare",
@@ -1174,7 +1218,9 @@ async def compact_conversation(
         },
     )
 
+    # 判断：如果开启了开始钩子
     if emit_hooks_start:
+        # 发送压缩准备开始的进度通知
         await _emit_progress(
             progress_callback,
             phase="hooks_start",
@@ -1183,10 +1229,16 @@ async def compact_conversation(
             checkpoint="compact_hooks_start",
             metadata=start_checkpoint,
         )
+
+    # 判断：如果存在钩子执行器
     if hook_executor is not None:
+        # 执行压缩前置钩子
         hook_result = await hook_executor.execute(HookEvent.PRE_COMPACT, hook_payload)
+        # 判断：如果钩子返回阻止压缩
         if hook_result.blocked:
+            # 获取阻止原因
             reason = hook_result.reason or "pre-compact hook blocked compaction"
+            # 记录压缩失败检查点
             failed_checkpoint = _record_compact_checkpoint(
                 carryover_metadata,
                 checkpoint="compact_failed",
@@ -1195,6 +1247,7 @@ async def compact_conversation(
                 token_count=pre_compact_tokens,
                 details={"reason": reason},
             )
+            # 发送压缩失败进度
             await _emit_progress(
                 progress_callback,
                 phase="compact_failed",
@@ -1203,12 +1256,15 @@ async def compact_conversation(
                 checkpoint="compact_failed",
                 metadata=failed_checkpoint,
             )
+            # 返回不压缩的原始结果
             return _build_passthrough_compaction_result(
                 messages,
                 trigger=trigger,
                 compact_kind="full",
                 metadata={"reason": reason},
             )
+
+    # 记录压缩正式开始的检查点
     compact_start_checkpoint = _record_compact_checkpoint(
         carryover_metadata,
         checkpoint="compact_start",
@@ -1217,6 +1273,8 @@ async def compact_conversation(
         token_count=pre_compact_tokens,
         details={"preserve_recent": preserve_recent},
     )
+
+    # 发送压缩开始的进度通知
     await _emit_progress(
         progress_callback,
         phase="compact_start",
@@ -1226,49 +1284,62 @@ async def compact_conversation(
         metadata=compact_start_checkpoint,
     )
 
-    summary_text = ""
-    messages_to_summarize = compact_messages
-    retry_messages = messages_to_summarize
-    ptl_retries = 0
+    # 初始化变量
+    summary_text = ""                              # 存储AI返回的总结文本
+    messages_to_summarize = compact_messages       # 待总结的消息
+    retry_messages = messages_to_summarize        # 重试时使用的消息
+    ptl_retries = 0                                # prompt超长重试次数
 
+    # 定义内部异步函数：流式调用AI接口获取总结内容
     async def _collect_summary(summary_request_messages: list[ConversationMessage]) -> str:
-        collected = ""
+        collected = ""  # 存储收集到的流式响应
+        # 把消息中的图片替换为占位符
         summary_request_messages = _replace_images_with_compaction_placeholders(
             summary_request_messages
         )
+        # 调用AI流式接口发起请求
         stream = api_client.stream_message(
             ApiMessageRequest(
                 model=model,
                 messages=summary_request_messages,
                 system_prompt=system_prompt or "You are a conversation summarizer.",
                 max_tokens=MAX_OUTPUT_TOKENS_FOR_SUMMARY,
-                tools=[],  # no tools for compact call
+                tools=[],  # 压缩过程不使用工具调用
             )
         )
+        # 如果stream是异步对象，先等待完成
         if inspect.isawaitable(stream):
             stream = await stream
+        # 判断stream是否支持异步迭代
         if not hasattr(stream, "__aiter__"):
             raise RuntimeError("Compaction client did not provide a streaming response.")
+        # 遍历流式响应，收集完整总结
         async for event in stream:
             if isinstance(event, ApiMessageCompleteEvent):
                 collected = event.message.text
+        # 如果收集到内容，返回总结；否则抛异常
         if collected.strip():
             return collected
         raise RuntimeError(ERROR_MESSAGE_INCOMPLETE_RESPONSE)
 
+    # 循环重试调用AI总结，支持超时、超长重试
     for attempt in range(1, MAX_COMPACT_STREAMING_RETRIES + 2):
         try:
+            # 带超时控制，调用AI总结函数
             summary_text = await asyncio.wait_for(
                 _collect_summary(retry_messages),
                 timeout=COMPACT_TIMEOUT_SECONDS,
             )
-            break
+            break  # 成功获取总结，退出重试循环
         except Exception as exc:
+            # 异常1：提示词超长，且未达到最大重试次数
             if _is_prompt_too_long_error(exc) and ptl_retries < MAX_PTL_RETRIES:
+                # 裁剪消息头部（删除最早的内容）
                 truncated = truncate_head_for_ptl_retry(retry_messages[:-1])
                 if truncated:
                     ptl_retries += 1
                     retry_messages = [*truncated, retry_messages[-1]]
+                    # 发送重试进度并记录检查点
                     await _emit_progress(
                         progress_callback,
                         phase="compact_retry",
@@ -1287,7 +1358,9 @@ async def compact_conversation(
                         ),
                     )
                     continue
+            # 异常2：超过最大重试次数
             if attempt > MAX_COMPACT_STREAMING_RETRIES:
+                # 发送失败进度，记录检查点，抛出异常
                 await _emit_progress(
                     progress_callback,
                     phase="compact_failed",
@@ -1306,6 +1379,7 @@ async def compact_conversation(
                     ),
                 )
                 raise
+            # 其他异常：记录重试，继续循环
             await _emit_progress(
                 progress_callback,
                 phase="compact_retry",
@@ -1324,7 +1398,9 @@ async def compact_conversation(
                 ),
             )
 
+    # 判断：如果AI没有返回有效总结内容
     if not summary_text:
+        # 发送失败进度，记录检查点
         await _emit_progress(
             progress_callback,
             phase="compact_failed",
@@ -1340,7 +1416,9 @@ async def compact_conversation(
                 details={"reason": ERROR_MESSAGE_INCOMPLETE_RESPONSE},
             ),
         )
+        # 打印警告日志
         log.warning("Compact summary was empty — returning original messages")
+        # 返回原始不压缩结果
         return _build_passthrough_compaction_result(
             messages,
             trigger=trigger,
@@ -1348,15 +1426,20 @@ async def compact_conversation(
             metadata={"reason": ERROR_MESSAGE_INCOMPLETE_RESPONSE},
         )
 
-    # Step 4: build the new message list
+    """生成标准的总结消息内容 
+    第四步：构建压缩后的新消息列表 build_compact_summary_message函数用来生成对话压缩后的提示话术，
+    整理历史摘要并附上对应指令，替换掉精简后的旧聊天记录。"""
     summary_content = build_compact_summary_message(
         summary_text,
         suppress_follow_up=suppress_follow_up,
         recent_preserved=len(newer) > 0,
     )
-    summary_msg = ConversationMessage.from_user_text(summary_content)
-    initial_post_compact_tokens = estimate_message_tokens([summary_msg, *newer])
+    summary_msg = ConversationMessage.from_user_text(summary_content)  # 转为消息对象
+    initial_post_compact_tokens = estimate_message_tokens([summary_msg, *newer])  # 统计压缩后token
+
+    # 判断：如果存在后置钩子执行器
     if hook_executor is not None:
+        # 执行压缩完成后置钩子
         post_hook_result = await hook_executor.execute(
             HookEvent.POST_COMPACT,
             {
@@ -1372,15 +1455,17 @@ async def compact_conversation(
                 **(carryover_metadata or {}),
             },
         )
+        # 处理钩子返回的内容
         hook_note = post_hook_result.reason or "\n".join(
             result.output.strip()
             for result in post_hook_result.results
             if result.output.strip()
         )
-        hook_attachments = _create_hook_attachments(hook_note)
+        hook_attachments = _create_hook_attachments(hook_note)  # 创建钩子附件
     else:
-        hook_attachments = []
+        hook_attachments = []  # 无钩子则附件为空
 
+    # 构建压缩结果的完整元数据
     compact_metadata = {
         "trigger": trigger,
         "compact_kind": "full",
@@ -1395,6 +1480,8 @@ async def compact_conversation(
         "retry_attempts": max(0, attempt - 1 if "attempt" in locals() else 0),
         "attachments": attachment_paths,
     }
+
+    # 判断：如果有传递过来的元数据，合并检查点信息
     if carryover_metadata is not None:
         checkpoints = carryover_metadata.get("compact_checkpoints")
         if isinstance(checkpoints, list):
@@ -1403,6 +1490,7 @@ async def compact_conversation(
         if isinstance(compact_last, dict):
             compact_metadata["compact_last"] = compact_last
 
+    # 创建最终的压缩结果对象
     compaction_result = CompactionResult(
         trigger=trigger,
         compact_kind="full",
@@ -1413,18 +1501,27 @@ async def compact_conversation(
         hook_results=hook_attachments,
         compact_metadata=compact_metadata,
     )
+
+    # 最终格式化压缩结果
     compaction_result = _finalize_compaction_result(compaction_result)
-    post_compact_messages = build_post_compact_messages(compaction_result)
-    post_compact_tokens = estimate_message_tokens(post_compact_messages)
+    """build_post_compact_messages按固定顺序组装压缩后的对话消息，整合边界标记、摘要、保留消息、附件与钩子消息，返回最终可用列表。"""
+    post_compact_messages = build_post_compact_messages(compaction_result)  # 生成最终压缩消息
+    post_compact_tokens = estimate_message_tokens(post_compact_messages)  # 统计最终token
+
+    # 给结果补充统计元数据
     compaction_result.compact_metadata["post_compact_message_count"] = len(post_compact_messages)
     compaction_result.compact_metadata["post_compact_token_count"] = post_compact_tokens
     compaction_result.boundary_marker = create_compact_boundary_message(compaction_result.compact_metadata)
+
+    # 打印压缩完成日志，展示压缩效果
     log.info(
         "Compaction done: %d -> %d messages, ~%d -> ~%d tokens (saved ~%d)",
         len(messages), len(post_compact_messages),
         pre_compact_tokens, post_compact_tokens,
         pre_compact_tokens - post_compact_tokens,
     )
+
+    # 发送压缩完成的进度通知
     await _emit_progress(
         progress_callback,
         phase="compact_end",
@@ -1448,13 +1545,24 @@ async def compact_conversation(
             },
         ),
     )
-    return compaction_result
 
+    # 返回最终的对话压缩结果
+    return compaction_result
 
 # ---------------------------------------------------------------------------
 # Auto-compact integration (called from query loop)
 # ---------------------------------------------------------------------------
+"""按需分层压缩（微压缩→上下文折叠→会话记忆→AI 全压缩），逐级降低 token 占用
+核心作用：防止对话超出模型 token 限制，保证对话流畅持续进行
 
+这是 OpenHarness 对话上下文自动压缩核心函数，每次对话前执行。先判断是否需要压缩，无需则直接返回；
+需要则依次执行轻量压缩、上下文折叠、会话记忆压缩，都无效就执行完整 AI 压缩。
+全程记录日志与状态，失败会计数，最终返回压缩后的消息和是否压缩标记，保障对话不超出模型 token 限制。
+
+messages = 对话消息列表，api_client=AI 接口客户端，model = 使用模型，
+system_prompt = 系统提示词，state = 压缩状态，preserve_recent = 保留最近消息数，
+force = 强制压缩，trigger = 压缩触发方式，hook_executor为回调、carryover_metadata元数据、
+context_window_tokens、auto_compact_threshold_tokens是token 限制配置。"""
 async def auto_compact_if_needed(
     messages: list[ConversationMessage],
     *,
@@ -1478,6 +1586,8 @@ async def auto_compact_if_needed(
     Returns:
         (messages, was_compacted) — if compacted, messages is the new list.
     """
+    """!!!压缩总开关，决定是否启动压缩流程。    
+    核心是判断是否需要压缩的配置与消息：非强制压缩且无需压缩时，直接返回原消息，不执行压缩。"""
     if not force and not should_autocompact(
         messages,
         model,
@@ -1487,6 +1597,9 @@ async def auto_compact_if_needed(
     ):
         return messages, False
 
+    """carryover_metadata = 元数据，trigger = 触发方式，消息数量、token 数等统计值。
+    打印压缩触发日志，
+    _record_compact_checkpoint记录压缩触发的检查点数据。"""
     log.info("Auto-compact triggered (failures=%d)", state.consecutive_failures)
     _record_compact_checkpoint(
         carryover_metadata,
@@ -1498,7 +1611,10 @@ async def auto_compact_if_needed(
     )
 
     # Try microcompact first — may be enough
+    """!!执行轻量微压缩，释放token。
+    messages = 原始消息列表。 执行轻量微压缩，释放 token；若释放后无需压缩，直接返回结果。"""
     messages, tokens_freed = microcompact_messages(messages)
+    # 记录微压缩完成检查点
     _record_compact_checkpoint(
         carryover_metadata,
         checkpoint="query_microcompact_end",
@@ -1507,6 +1623,7 @@ async def auto_compact_if_needed(
         token_count=estimate_message_tokens(messages),
         details={"tokens_freed": tokens_freed},
     )
+    # 微压缩有效且无需继续压缩，直接返回结果
     if tokens_freed > 0 and not should_autocompact(
         messages,
         model,
@@ -1517,8 +1634,12 @@ async def auto_compact_if_needed(
         log.info("Microcompact freed ~%d tokens, auto-compact no longer needed", tokens_freed)
         return messages, True
 
+    """尝试执行上下文折叠
+    preserve_recent = 保留最近消息数量。  尝试折叠超大上下文，更新消息，压缩达标则直接返回。"""
     context_collapsed = try_context_collapse(messages, preserve_recent=preserve_recent)
+    # 上下文折叠成功
     if context_collapsed is not None:
+        # 发送上下文折叠开始的进度通知
         await _emit_progress(
             progress_callback,
             phase="context_collapse_start",
@@ -1533,7 +1654,9 @@ async def auto_compact_if_needed(
                 token_count=estimate_message_tokens(messages),
             ),
         )
+        # 更新消息为折叠后的内容
         messages = context_collapsed
+        # 发送上下文折叠完成的进度通知
         await _emit_progress(
             progress_callback,
             phase="context_collapse_end",
@@ -1548,6 +1671,7 @@ async def auto_compact_if_needed(
                 token_count=estimate_message_tokens(messages),
             ),
         )
+        # 达标则返回压缩后消息
         if not force and not should_autocompact(
             messages,
             model,
@@ -1557,117 +1681,173 @@ async def auto_compact_if_needed(
         ):
             return messages, True
 
+    """!!核心压缩方案，长期对话优化关键。     尝试轻量级会话记忆压缩
+    将会话历史压缩为记忆摘要，更新状态，返回压缩后消息。
+    
+    try_session_memory_compaction函数是轻量级对话压缩方法，在 AI 压缩前执行。
+    消息过短则不处理，拆分历史与最新消息，将历史生成摘要。若压缩无效直接退出，
+    否则记录压缩信息并生成压缩结果，返回优化后的对话数据。"""
     session_memory = try_session_memory_compaction(
-        messages,
+        messages,  # 传入当前所有对话消息
+        # 保留最近消息数量：取传入值和默认最小值中更大的那个
         preserve_recent=max(preserve_recent, SESSION_MEMORY_KEEP_RECENT),
-        trigger=trigger,
-        metadata=carryover_metadata,
+        trigger=trigger,  # 压缩触发条件（如长度超限/自动触发）
+        metadata=carryover_metadata,  # 传入需要传递的元数据（记录点）
     )
+
+    # 如果轻量化-会话记忆压缩成功（返回了有效会话记忆）
     if session_memory is not None:
+        # 发送会话记忆压缩开始进度通知
         await _emit_progress(
-            progress_callback,
-            phase="session_memory_start",
+            progress_callback,  # 进度回调函数
+            phase="session_memory_start",  # 阶段：会话记忆开始
             trigger=trigger,
-            message="Condensing earlier conversation into session memory.",
-            checkpoint="query_session_memory_start",
+            message="Condensing earlier conversation into session memory.",  # 提示语
+            checkpoint="query_session_memory_start",  # 检查点标识
+            # 调用  记录精简版检查点数据的函数_record_compact_checkpoint，记录压缩开始的检查点元数据
             metadata=_record_compact_checkpoint(
                 carryover_metadata,
                 checkpoint="query_session_memory_start",
                 trigger=trigger,
-                message_count=len(messages),
-                token_count=estimate_message_tokens(messages),
+                message_count=len(messages),  # 压缩前消息总数
+                token_count=estimate_message_tokens(messages),  # 压缩前令牌总数
             ),
         )
+
+        # 异步发送进度通知：会话记忆生成完成
         await _emit_progress(
             progress_callback,
-            phase="session_memory_end",
+            phase="session_memory_end",  # 阶段：会话记忆结束
             trigger=trigger,
             message="Session memory condensation complete.",
             checkpoint="query_session_memory_end",
+            # 记录压缩完成的检查点
             metadata=_record_compact_checkpoint(
                 carryover_metadata,
                 checkpoint="query_session_memory_end",
                 trigger=trigger,
+                # 压缩后的新消息数量,"""build_post_compact_messages按固定顺序组装压缩后的对话消息，整合边界标记、摘要、保留消息、附件与钩子消息，返回最终可用列表。"""
                 message_count=len(build_post_compact_messages(session_memory)),
+                # 压缩后的新消息令牌数
                 token_count=estimate_message_tokens(build_post_compact_messages(session_memory)),
             ),
         )
+
+        # 更新状态：标记已压缩
         state.compacted = True
+        # 对话轮次 +1
         state.turn_counter += 1
+        # 生成新的唯一轮次ID
         state.turn_id = uuid4().hex
+        # 连续压缩失败次数重置为0
         state.consecutive_failures = 0
+        # 返回压缩后的消息 + 压缩成功标记(True)
         return build_post_compact_messages(session_memory), True
 
-    # Full compact needed
+    """!!!轻量化压缩失败，进入【完整压缩兜底流程】,执行最终完整 AI 压缩，异常处理保障流程不崩溃
+    最终压缩兜底，异常处理保障流程不崩溃。
+    compact_conversation调用大模型总结，实现对话完整压缩，最终返回压缩结果对象
+    调用 LLM 总结实现消息压缩
+    1. 先微压缩（低成本减少令牌）
+    2. 拆分消息：旧消息（总结）+ 新消息（保留）
+    3. 调用 LLM 生成结构化总结
+    4. 用总结替换旧消息 + 保留新消息
+    
+    执行最终完整 AI 压缩：成功则返回结果；失败则记录错误、增加失败计数，返回原消息。"""
     try:
+        # 异步调用完整对话压缩函数（AI 重写/总结长对话）
         result = await compact_conversation(
             messages,
-            api_client=api_client,
-            model=model,
-            system_prompt=system_prompt,
-            preserve_recent=preserve_recent,
-            suppress_follow_up=True,
-            trigger=trigger,
-            progress_callback=progress_callback,
-            hook_executor=hook_executor,
-            carryover_metadata=carryover_metadata,
+            api_client=api_client,  # AI 接口客户端
+            model=model,  # 使用的模型
+            system_prompt=system_prompt,  # 系统提示词
+            preserve_recent=preserve_recent,  # 保留最近消息数
+            suppress_follow_up=True,  # 不生成追问
+            trigger=trigger,  # 触发条件
+            progress_callback=progress_callback,  # 进度回调
+            hook_executor=hook_executor,  # 钩子执行器
+            carryover_metadata=carryover_metadata,  # 传递元数据
         )
+
+        # 完整压缩成功，更新状态
         state.compacted = True
         state.turn_counter += 1
         state.turn_id = uuid4().hex
         state.consecutive_failures = 0
+        # 返回压缩后的消息 + 成功标记
         return build_post_compact_messages(result), True
+
+    # 压缩过程出现任何异常（网络/模型/超时等）
     except Exception as exc:
+        # 连续失败次数 +1
         state.consecutive_failures += 1
+        # 记录【压缩失败】检查点，带上错误原因和失败次数
         _record_compact_checkpoint(
             carryover_metadata,
             checkpoint=f"query_{trigger}_failed",
             trigger=trigger,
             message_count=len(messages),
             token_count=estimate_message_tokens(messages),
+            # 错误详情：异常信息 + 当前连续失败次数
             details={"reason": str(exc), "consecutive_failures": state.consecutive_failures},
         )
+
+        # 打印错误日志
         log.error(
             "Auto-compact failed (attempt %d/%d): %s",
-            state.consecutive_failures,
-            MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
-            exc,
+            state.consecutive_failures,  # 当前第几次失败
+            MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,  # 最大允许失败次数
+            exc,  # 异常对象
         )
+        # 压缩失败：返回原始消息 + 失败标记(False)
         return messages, False
-
-
 # ---------------------------------------------------------------------------
 # Legacy compat
 # ---------------------------------------------------------------------------
-
+"""用于生成最近对话的精简摘要，截取最新消息，提取角色和文本内容，限制长度后拼接返回，用于快速展示对话历史。"""
+# 定义生成对话摘要的函数，参数为消息列表、最大截取条数，返回字符串
 def summarize_messages(
     messages: list[ConversationMessage],
     *,
     max_messages: int = 8,
 ) -> str:
     """Produce a compact textual summary of recent messages (legacy)."""
+    # 截取消息列表末尾最新的max_messages条数据
     selected = messages[-max_messages:]
+    # 创建空列表，用于存储格式化后的每一行内容
     lines: list[str] = []
+    # 遍历选中的所有消息
     for message in selected:
+        # 去除消息文本的前后空白字符
         text = message.text.strip()
+        # 如果文本为空，跳过这条消息
         if not text:
             continue
+        # 拼接角色和文本内容，最多保留300字符，加入列表
         lines.append(f"{message.role}: {text[:300]}")
+    # 用换行符连接所有行，返回最终摘要字符串
     return "\n".join(lines)
 
-
+"""旧版对话压缩工具，将早期消息生成摘要替换，保留最新消息，返回整洁的压缩后对话列表。"""
+# 定义旧版消息压缩函数，参数为消息列表、保留最新消息数，返回压缩后的消息列表
 def compact_messages(
     messages: list[ConversationMessage],
     *,
     preserve_recent: int = 6,
 ) -> list[ConversationMessage]:
+    # 函数说明：用摘要替换早期对话历史（旧版方法）
     """Replace older conversation history with a synthetic summary (legacy)."""
+    # 如果消息总数小于等于需要保留的数量，直接清理并返回原消息
     if len(messages) <= preserve_recent:
         return sanitize_conversation_messages(list(messages))
+    # 将消息拆分为历史消息和需要保留的最新消息
     older, newer = _split_preserving_tool_pairs(messages, preserve_recent=preserve_recent)
+    # 对历史消息生成摘要
     summary = summarize_messages(older)
+    # 如果生成的摘要为空，直接返回最新消息
     if not summary:
         return list(newer)
+    # 组装摘要消息+最新消息，清理格式后返回最终结果
     return sanitize_conversation_messages([
         ConversationMessage(
             role="user",
@@ -1675,7 +1855,6 @@ def compact_messages(
         ),
         *newer,
     ])
-
 
 __all__ = [
     "AUTO_COMPACT_BUFFER_TOKENS",

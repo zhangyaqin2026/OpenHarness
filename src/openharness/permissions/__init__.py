@@ -10,7 +10,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
 __all__ = ["PermissionChecker", "PermissionDecision", "PermissionMode"]
 
-
+"""OpenHarness 的权限模块导出文件，作用是统一对外暴露权限相关类，并实现延迟加载（用到时才真正导入），
+让导入更简洁、启动更快，不重复写复杂路径。"""
 def __getattr__(name: str):
     if name in {"PermissionChecker", "PermissionDecision"}:
         from openharness.permissions.checker import PermissionChecker, PermissionDecision

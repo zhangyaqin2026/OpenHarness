@@ -7,7 +7,16 @@ from pathlib import Path
 from openharness.memory.paths import get_project_memory_dir
 from openharness.memory.types import MemoryHeader
 
+"""项目记忆文件扫描工具，负责读取项目里的记忆文档，解析标题、描述、内容预览，按修改时间排序返回，
+供 AI 快速检索和加载记忆，是记忆系统的核心读取模块。
+ 
+ scan_memory_files：扫描记忆目录，读取所有.md 文件，过滤索引文件，解析并返回按时间排序的记忆列表。
+_parse_memory_file：解析单个记忆文件，提取 YAML 头信息、标题、描述、内容预览，返回结构化数据。
 
+scan_memory_files：AI 获取记忆的入口函数
+_parse_memory_file：解析记忆文件的核心工具
+总结:代码用于扫描、解析、整理项目记忆文件，让 AI 快速读取上下文。
+ """
 def scan_memory_files(cwd: str | Path, *, max_files: int = 50) -> list[MemoryHeader]:
     """Return memory headers sorted by newest first."""
     memory_dir = get_project_memory_dir(cwd)

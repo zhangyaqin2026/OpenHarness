@@ -8,16 +8,28 @@ from pathlib import Path
 MAX_ENTRYPOINT_LINES = 200
 ENTRYPOINT_NAME = "MEMORY.md"
 
+"""OpenHarness 长期记忆系统的「提示词构建器」，生成一段严格的 LLM 提示词，让 AI 自动、安全、规范地整理长期记忆。
+它让 AI 做什么？
+读取最近会话
+读取旧记忆
+按 5 大类分类记忆
+合并、去重、精简
+保护隐私、删除密钥
+更新 MEMORY.md 索引
+返回结构化总结
+这是整个记忆系统的 “大脑指令”
+没有这段提示词，LLM 就不知道如何整理记忆。
 
+最终输出一整段超长、严格、完整的系统提示词，让 AI 安全、规范地自动整理长期记忆。"""
 def build_consolidation_prompt(
-    memory_root: str | Path,
+    memory_root: str | Path, #记忆文件夹根目录
     session_dir: str | Path,
-    extra: str = "",
+    extra: str = "", #额外上下文
     *,
     preview: bool = False,
 ) -> str:
     """Build the dream prompt used by manual and automatic memory consolidation."""
-
+    """把传入的路径统一转成 Path 对象，保证安全。"""
     memory_root = Path(memory_root)
     session_dir = Path(session_dir)
     extra_section = f"\n\n## Additional context\n\n{extra.strip()}" if extra.strip() else ""

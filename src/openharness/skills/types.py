@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
+"""技能的标准数据格式
+作用：统一记录技能的名称、说明、内容、配置等全部信息"""
 @dataclass(frozen=True)
 class SkillDefinition:
     """A loaded skill."""

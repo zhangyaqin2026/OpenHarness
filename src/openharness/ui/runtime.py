@@ -570,7 +570,10 @@ def refresh_runtime_client(bundle: RuntimeBundle) -> None:
     bundle.engine.set_model(settings.model)
     sync_app_state(bundle)
 
-
+"""单行指令核心处理器，接收运行环境、输入内容与输出渲染方法。
+优先匹配斜杠命令并执行，支持命令唤起对话、接续未完成任务，自动切换模型、拼接系统提示词，流式返回 AI 响应，
+捕获对话轮次超限异常，自动保存会话快照、同步程序状态。
+无匹配命令时，直接把文本当作普通提问发给 AI，最终返回是否继续运行会话。"""
 async def handle_line(
     bundle: RuntimeBundle,
     line: str,

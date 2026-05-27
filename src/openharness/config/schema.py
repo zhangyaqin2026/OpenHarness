@@ -8,21 +8,23 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+"""定义了多平台消息通道的兼容配置模型，使用 Pydantic 统一管理 Telegram、Slack、飞书、钉钉、邮件等
+第三方平台的连接参数、开关与权限，是系统对接外部通讯工具的配置数据结构。   """
 
 class _CompatModel(BaseModel):
     """Base model that tolerates adapter-specific extra fields."""
 
     model_config = ConfigDict(extra="allow")
 
-
+"""存储 AI 服务提供商的 API 密钥配置"""
 class ProviderApiKeyConfig(_CompatModel):
     api_key: str = ""
 
-
+"""聚合管理所有 AI 服务提供商配置"""
 class ProviderConfigs(_CompatModel):
     groq: ProviderApiKeyConfig = Field(default_factory=ProviderApiKeyConfig)
 
-
+"""所有通道的基础配置:包含开关、允许发送者列表，通用权限控制"""
 class BaseChannelConfig(_CompatModel):
     enabled: bool = False
     # Secure default: enabling a channel does not automatically trust every
@@ -95,7 +97,7 @@ class MochatConfig(BaseChannelConfig):
     endpoint: str = ""
     token: str = ""
 
-
+"""!!!通道总配置:聚合所有平台通道，统一管理开关、提示、各平台参数"""
 class ChannelConfigs(_CompatModel):
     send_progress: bool = True
     send_tool_hints: bool = True
@@ -110,7 +112,7 @@ class ChannelConfigs(_CompatModel):
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     mochat: MochatConfig = Field(default_factory=MochatConfig)
 
-
+"""最核心顶层配置:整合所有通道配置 + AI 服务配置，整个系统的外部连接总配置"""
 class Config(_CompatModel):
     channels: ChannelConfigs = Field(default_factory=ChannelConfigs)
     providers: ProviderConfigs = Field(default_factory=ProviderConfigs)

@@ -41,7 +41,15 @@ BASE_DELAY = 1.0
 MAX_DELAY = 30.0
 _MAX_COMPLETION_TOKEN_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
+""" 兼容 OpenAI 格式的 AI 模型客户端，支持阿里云、GitHub 等厂商接口，完成消息格式转换、流式输出、自动重试、错误处理，
+统一对接不同 AI 服务，是系统调用大模型的核心适配层。   
 
+OpenAICompatibleClient：整个文件核心，统一适配多厂商 AI 接口
+stream_message()：对外提供流式调用 + 自动重试
+格式转换函数群：实现内部消息 ↔ OpenAI 格式互通
+支持重试、异常转换、流式输出、多厂商兼容"""
+
+"""根据模型类型，返回正确的 token 限制参数（max_tokens/max_completion_tokens）"""
 def _token_limit_param_for_model(model: str, max_tokens: int) -> dict[str, int]:
     """Return the correct token limit field for the target OpenAI model.
 
@@ -55,7 +63,7 @@ def _token_limit_param_for_model(model: str, max_tokens: int) -> dict[str, int]:
         return {"max_completion_tokens": max_tokens}
     return {"max_tokens": max_tokens}
 
-
+"""将通用工具格式转为 OpenAI 函数调用格式"""
 def _convert_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert Anthropic tool schemas to OpenAI function-calling format.
 
@@ -76,7 +84,7 @@ def _convert_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]
         })
     return result
 
-
+"""将内部对话消息转为 OpenAI 接口要求的消息格式"""
 def _convert_messages_to_openai(
     messages: list[ConversationMessage],
     system_prompt: str | None,
@@ -124,7 +132,7 @@ def _convert_messages_to_openai(
 
     return openai_messages
 
-
+"""处理用户消息（文本 / 图片），转为 OpenAI 格式 """
 def _convert_user_content_to_openai(blocks: list[ContentBlock]) -> str | list[dict[str, Any]]:
     """Convert user text/image blocks into OpenAI chat content."""
     has_image = any(isinstance(block, ImageBlock) for block in blocks)
@@ -144,7 +152,7 @@ def _convert_user_content_to_openai(blocks: list[ContentBlock]) -> str | list[di
             })
     return content
 
-
+"""将助手消息转为 OpenAI 格式，支持工具调用"""
 def _convert_assistant_message(msg: ConversationMessage) -> dict[str, Any]:
     """Convert an assistant ConversationMessage to OpenAI format.
 
@@ -184,7 +192,7 @@ def _convert_assistant_message(msg: ConversationMessage) -> dict[str, Any]:
 
     return openai_msg
 
-
+"""解析 OpenAI 接口返回结果，转为内部消息对象"""
 def _parse_assistant_response(response: Any) -> ConversationMessage:
     """Parse an OpenAI ChatCompletion response into a ConversationMessage."""
     choice = response.choices[0]
@@ -208,7 +216,7 @@ def _parse_assistant_response(response: Any) -> ConversationMessage:
 
     return ConversationMessage(role="assistant", content=content)
 
-
+"""标准化接口地址，保证兼容不同厂商"""
 def _normalize_openai_base_url(base_url: str | None) -> str | None:
     """Normalize custom OpenAI-compatible base URLs without dropping API path segments."""
     if not base_url:
@@ -224,7 +232,7 @@ def _normalize_openai_base_url(base_url: str | None) -> str | None:
         path = "/v1"
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
 
-
+"""!!核心客户端类  统一对接各类 OpenAI 兼容接口，实现流式调用、自动重试、异常处理"""
 class OpenAICompatibleClient:
     """Client for OpenAI-compatible APIs (DashScope, GitHub Models, etc.).
 
@@ -244,6 +252,7 @@ class OpenAICompatibleClient:
             kwargs["timeout"] = timeout
         self._client = AsyncOpenAI(**kwargs)
 
+    """最核心方法 :!!!对外提供流式对话，自动重试 3 次，处理所有异常"""
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Yield text deltas and the final message, matching the Anthropic client interface."""
         last_error: Exception | None = None
@@ -276,6 +285,7 @@ class OpenAICompatibleClient:
         if last_error is not None:
             raise self._translate_error(last_error) from last_error
 
+    """单次执行流式请求，解析返回文本、工具、用量"""
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Single attempt: stream an OpenAI chat completion."""
         openai_messages = _convert_messages_to_openai(request.messages, request.system_prompt)
@@ -397,6 +407,7 @@ class OpenAICompatibleClient:
             stop_reason=finish_reason,
         )
 
+    """判断接口异常是否可重试"""
     @staticmethod
     def _is_retryable(exc: Exception) -> bool:
         status = getattr(exc, "status_code", None)
@@ -406,6 +417,7 @@ class OpenAICompatibleClient:
             return True
         return False
 
+    """将接口异常转为系统内部错误类型"""
     @staticmethod
     def _translate_error(exc: Exception) -> OpenHarnessApiError:
         status = getattr(exc, "status_code", None)
@@ -421,7 +433,7 @@ class OpenAICompatibleClient:
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _THINK_OPEN_TAG = "<think>"
 
-
+"""过滤流式返回中的思考内容，只输出可见文本"""
 def _strip_think_blocks(buf: str) -> tuple[str, str]:
     """Strip complete ``<think>…</think>`` blocks and return ``(visible_text, leftover)``.
 
